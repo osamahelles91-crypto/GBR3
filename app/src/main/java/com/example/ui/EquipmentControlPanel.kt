@@ -9087,51 +9087,6 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Test Connection Button (زر اختبار الاتصال من خلال وميض اللوحة/المتحكم)
-                    Button(
-                        onClick = {
-                            if (currentLineIp.isBlank()) {
-                                Toast.makeText(context, "الرجاء تحديد عنوان IP أولاً", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            sendCommand("http://$currentLineIp/led?action=blink", {
-                                Toast.makeText(context, "تم إرسال أمر وميض اللوحة الذكية للتأكيد بنجاح! 💡", Toast.LENGTH_SHORT).show()
-                            }, { err ->
-                                Toast.makeText(context, "فشل إرسال أمر الوميض: ${err.message}", Toast.LENGTH_SHORT).show()
-                            })
-                        },
-                        enabled = isControllerOnline && currentLineIp.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = GBRBlueMain,
-                            contentColor = Color.White,
-                            disabledContainerColor = Color.LightGray.copy(alpha = 0.6f),
-                            disabledContentColor = Color.Gray
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .height(30.dp)
-                            .testTag("test_connection_btn")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = "اختبار الاتصال باللوحة (وميض LED)",
-                                tint = if (isControllerOnline && currentLineIp.isNotBlank()) Color.White else Color.Gray,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = "اختبار الاتصال",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.5.sp,
-                                color = if (isControllerOnline && currentLineIp.isNotBlank()) Color.White else Color.Gray
-                            )
-                        }
-                    }
-
                     // Interactive Transmission Signal Indicator Button (Opens Device Health & Stats Dialog)
                     Button(
                         onClick = {
@@ -12088,7 +12043,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                         }
                         Column {
                             Text(
-                                text = "مركز صيانة خط إنتاج 2 🛠️",
+                                text = "مركز الصيانة 🛠️",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                                 color = GBRDarkIndigo
@@ -12135,7 +12090,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                             .testTag("maintenance_btn_sensors_status")
                     ) {
                         Row(
-                            modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -12146,7 +12101,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(38.dp)
                                         .background(Color(0xFF3B82F6), CircleShape),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -12154,123 +12109,37 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                         imageVector = Icons.Default.Sensors,
                                         contentDescription = null,
                                         tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        text = "حالة المستشعرات ⚡",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.5.sp,
+                                        color = Color(0xFF1E3A8A)
+                                    )
+                                    Surface(
+                                        color = Color(0xFFDBEAFE),
+                                        shape = RoundedCornerShape(4.dp)
                                     ) {
                                         Text(
-                                            text = "حالة المستشعرات ⚡",
+                                            text = "4 مستشعرات (GPIO)",
+                                            fontSize = 9.5.sp,
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 13.5.sp,
-                                            color = Color(0xFF1E3A8A)
+                                            color = Color(0xFF1D4ED8),
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                         )
-                                        Surface(
-                                            color = Color(0xFFDBEAFE),
-                                            shape = RoundedCornerShape(4.dp)
-                                        ) {
-                                            Text(
-                                                text = "4 مستشعرات (GPIO)",
-                                                fontSize = 9.5.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF1D4ED8),
-                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                            )
-                                        }
                                     }
                                     Text(
-                                        text = "تشخيص لحظي للمحرك، الهيدروليك، والسرعة مع منافذ GPIO وتفاصيل الأسلاك الميدانية.",
-                                        fontSize = 10.5.sp,
+                                        text = "تشخيص لحظي للمحرك، الهيدروليك، والسرعة مع منافذ GPIO.",
+                                        fontSize = 10.sp,
                                         color = Color(0xFF1E40AF),
-                                        lineHeight = 14.sp
+                                        lineHeight = 13.sp
                                     )
                                 }
                             }
                             Icon(Icons.Default.ChevronLeft, contentDescription = null, tint = Color(0xFF3B82F6), modifier = Modifier.size(22.dp))
-                        }
-                    }
-
-                    // Series of Upcoming Maintenance Tools (سلسلة أدوات الصيانة القادمة)
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(Icons.Default.HourglassEmpty, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
-                                Text(
-                                    text = "أدوات الصيانة الإضافية (سلسلة قادمة ⏳):",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF334155)
-                                )
-                            }
-                            Text(
-                                text = "تتضمن التحديثات التالية أدوات صيانة تفاعلية موسعة لخط الإنتاج 2:",
-                                fontSize = 10.sp,
-                                color = Color.Gray
-                            )
-
-                            // Upcoming Tool 1
-                            Surface(
-                                color = Color.White,
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp).fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(Icons.Default.Tune, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp))
-                                        Text("معايرة صمامات الهيدروليك وضغط الرفع", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Medium)
-                                    }
-                                    Surface(color = Color(0xFFF1F5F9), shape = RoundedCornerShape(4.dp)) {
-                                        Text("قريباً", fontSize = 9.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
-                                    }
-                                }
-                            }
-
-                            // Upcoming Tool 2
-                            Surface(
-                                color = Color.White,
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp).fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(Icons.Default.Speed, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp))
-                                        Text("فحص ومزامنة بكرات مغير السرعة الميكانيكي", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Medium)
-                                    }
-                                    Surface(color = Color(0xFFF1F5F9), shape = RoundedCornerShape(4.dp)) {
-                                        Text("قريباً", fontSize = 9.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -12495,6 +12364,9 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                             icon = Icons.Default.Speed,
                             iconTint = Color(0xFFD97706)
                         )
+
+                        // Spacer to ensure last sensor card is fully visible without clipping when scrolling
+                        Spacer(modifier = Modifier.height(100.dp))
                     }
                 }
             }
@@ -12565,7 +12437,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                             ) {
                                 Icon(Icons.Default.Build, contentDescription = null, tint = GBRBlueMain, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("مركز صيانة خط إنتاج 2 وأدوات الفحص 🛠️", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF1E3A8A))
+                                Text("مركز الصيانة", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF1E3A8A))
                             }
                         }
                     }

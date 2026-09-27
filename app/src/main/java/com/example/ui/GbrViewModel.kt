@@ -943,55 +943,70 @@ class GbrViewModel(application: Application) : AndroidViewModel(application) {
 
         startEquipmentBackgroundPolling()
 
-        // Clean up legacy pH tests and approve/adopt Alkalinity (pH Value) test
-        viewModelScope.launch {
-            try {
-                val list = repository.gbrDao().getAllQualityTestsSync()
-                val oldPhTests = list.filter { 
-                    val nameLower = it.name.lowercase().trim()
-                    (nameLower.contains("ph") && !it.name.contains("قلوية") && !it.name.contains("alkalinity")) || 
-                    nameLower == "ph" || 
-                    nameLower == "ph value" ||
-                    it.name.contains("درجة الحموضة") 
-                }
-                val hasAlkalinityTest = list.any { it.name.contains("قلوية") || it.name.lowercase().contains("alkalinity") }
-                
-                if (!hasAlkalinityTest) {
-                    repository.insertQualityTest(com.example.data.QualityTest(
-                        id = "alkalinity_test_id",
-                        name = "🧪 فحص درجة القلوية (pH Value)",
-                        sequenceIndex = 1
-                    ))
-                }
-                
-                for (oldPhTest in oldPhTests) {
-                    repository.deleteQualityTest(oldPhTest)
-                    repository.gbrDao().deleteFormulationQualityTestsByTestId(oldPhTest.id)
-                }
+        // One-time migration: Clean up and rename legacy pH tests to Alkalinity (pH Value) test
+        val isPhCleanupDone = syncPrefs.getBoolean("ph_cleanup_done", false)
+        if (!isPhCleanupDone) {
+            viewModelScope.launch {
+                try {
+                    val legacyPhNames = setOf(
+                        "ph",
+                        "ph value",
+                        "درجة الحموضة",
+                        "فحص الـ ph",
+                        "فحص ph"
+                    )
+                    fun isLegacyPhTest(rawName: String): Boolean {
+                        val clean = rawName.lowercase().trim().replace("🧪", "").trim()
+                        return clean in legacyPhNames
+                    }
 
-                // Clean up any duplicate/legacy LabTests in active/archived sessions
-                val allLabTests = repository.gbrDao().getAllLabTests().first()
-                val labPhTestsToDelete = allLabTests.filter { 
-                    val nameLower = it.name.lowercase().trim()
-                    (nameLower.contains("ph") && !nameLower.contains("قلوية") && !nameLower.contains("alkalinity")) ||
-                    nameLower == "ph" || nameLower == "ph value" || nameLower == "فحص الـ ph" || nameLower == "فحص ph" || nameLower == "درجة الحموضة"
-                }
-                for (test in labPhTestsToDelete) {
-                    repository.gbrDao().deleteLabTest(test)
-                }
+                    val list = repository.gbrDao().getAllQualityTestsSync()
+                    val oldPhTests = list.filter { isLegacyPhTest(it.name) }
+                    val hasAlkalinityTest = list.any { it.name.contains("قلوية") || it.name.lowercase().contains("alkalinity") }
 
-                // Clean up any duplicate/legacy ProductionOrderQualityTests
-                val allPoQualityTests = repository.gbrDao().getAllProductionOrderQualityTests().first()
-                val poPhTestsToDelete = allPoQualityTests.filter {
-                    val nameLower = it.testName.lowercase().trim()
-                    (nameLower.contains("ph") && !nameLower.contains("قلوية") && !nameLower.contains("alkalinity")) ||
-                    nameLower == "ph" || nameLower == "ph value" || nameLower == "فحص الـ ph" || nameLower == "فحص ph" || nameLower == "درجة الحموضة"
+                    if (!hasAlkalinityTest) {
+                        if (oldPhTests.isNotEmpty()) {
+                            val firstOld = oldPhTests.first()
+                            repository.updateQualityTest(firstOld.copy(name = "🧪 فحص درجة القلوية (pH Value)"))
+                            for (duplicateOld in oldPhTests.drop(1)) {
+                                repository.deleteQualityTest(duplicateOld)
+                                repository.gbrDao().deleteFormulationQualityTestsByTestId(duplicateOld.id)
+                            }
+                        } else {
+                            repository.insertQualityTest(com.example.data.QualityTest(
+                                id = "alkalinity_test_id",
+                                name = "🧪 فحص درجة القلوية (pH Value)",
+                                sequenceIndex = 1
+                            ))
+                        }
+                    } else {
+                        for (oldPhTest in oldPhTests) {
+                            repository.deleteQualityTest(oldPhTest)
+                            repository.gbrDao().deleteFormulationQualityTestsByTestId(oldPhTest.id)
+                        }
+                    }
+
+                    // Rename legacy LabTests in active/archived sessions to preserve recorded values
+                    val allLabTests = repository.gbrDao().getAllLabTests().first()
+                    val labPhTestsToRename = allLabTests.filter { isLegacyPhTest(it.name) }
+                    for (test in labPhTestsToRename) {
+                        repository.gbrDao().updateLabTest(test.copy(name = "فحص درجة القلوية (pH Value)"))
+                    }
+
+                    // Rename legacy ProductionOrderQualityTests to preserve recorded values and specifications
+                    val allPoQualityTests = repository.gbrDao().getAllProductionOrderQualityTests().first()
+                    val poPhTestsToRename = allPoQualityTests.filter { isLegacyPhTest(it.testName) }
+                    if (poPhTestsToRename.isNotEmpty()) {
+                        repository.gbrDao().insertProductionOrderQualityTests(
+                            poPhTestsToRename.map { it.copy(testName = "فحص درجة القلوية (pH Value)") }
+                        )
+                    }
+
+                    // Mark as done so this migration only runs once
+                    syncPrefs.edit().putBoolean("ph_cleanup_done", true).apply()
+                } catch (e: Exception) {
+                    android.util.Log.e("GbrViewModel", "Error cleaning up pH and Alkalinity tests", e)
                 }
-                for (test in poPhTestsToDelete) {
-                    repository.gbrDao().deleteProductionOrderQualityTest(test)
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("GbrViewModel", "Error cleaning up pH and Alkalinity tests", e)
             }
         }
 

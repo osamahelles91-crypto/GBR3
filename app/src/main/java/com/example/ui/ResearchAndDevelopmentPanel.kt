@@ -6306,7 +6306,23 @@ fun SampleExecutionDialog(
     
     // Shared States for execution (persisted across modes)
     var executedItemIds by remember { mutableStateOf(initialExecutedIds) }
-    var actualWeights by remember { mutableStateOf(emptyMap<String, String>()) }
+    var actualWeights by remember(phases, itemsList) {
+        val initialMap = mutableMapOf<String, String>()
+        phases.forEach { phase ->
+            phase.items.forEach { item ->
+                val sItem = itemsList.find { (it["rawMaterialId"] as? String) == item.rawMaterialId }
+                val origW = sItem?.get("originalQuantityMultiplier") as? Double ?: 0.0
+                val stdW = origW * item.ratio
+                val targetG = if (totalOriginalWeightKgValue > 0) {
+                    (stdW / totalOriginalWeightKgValue) * targetWeight * 1000.0
+                } else 0.0
+                if (item.isExecuted) {
+                    initialMap[item.id] = formatExactWeight(targetG)
+                }
+            }
+        }
+        mutableStateOf(initialMap.toMap())
+    }
     var itemObservations by remember { mutableStateOf(emptyMap<String, String>()) }
     
     // Lifting Text inputs out of LazyColumn to prevent focus loss & scrolling resets
@@ -6450,7 +6466,9 @@ fun SampleExecutionDialog(
                                 }
                                 val updatedRecipeJson = serializeRecipeJson(updatedPhases)
 
-                                onExecutionCompleted(sample.researchNotes + report, updatedRecipeJson)
+                                // Only append report if allDone (report complete). If saved as draft (!allDone), do not modify sample.researchNotes with report.
+                                val notesToSave = if (allDone) sample.researchNotes + report else sample.researchNotes
+                                onExecutionCompleted(notesToSave, updatedRecipeJson)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (allDone) RndSuccessGreen else Color(0xFF64748B)
@@ -6467,7 +6485,7 @@ fun SampleExecutionDialog(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (allDone) "حفظ التقرير 💾" else "حفظ كمسودة 💾",
+                                text = "حفظ 💾",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = if (isCompact) 10.sp else 11.sp
