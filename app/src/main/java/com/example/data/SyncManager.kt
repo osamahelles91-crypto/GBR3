@@ -1984,7 +1984,8 @@ object SyncManager {
                                             "viscosityDilutedJson" to ls.viscosityDilutedJson,
                                             "viscosityDilutedFinalResult" to ls.viscosityDilutedFinalResult,
                                             "rheologyJson" to ls.rheologyJson,
-                                            "rheologyIndexResult" to ls.rheologyIndexResult
+                                            "rheologyIndexResult" to ls.rheologyIndexResult,
+                                            "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                                         ), SetOptions.merge()
                                     ).awaitTask()
                                     uploadedCount.incrementAndGet()
@@ -2061,7 +2062,8 @@ object SyncManager {
                                             "bindingElementName" to la.bindingElementName,
                                             "alertLevel" to la.alertLevel,
                                             "status" to la.status,
-                                            "createdAt" to la.createdAt
+                                            "createdAt" to la.createdAt,
+                                            "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                                         ), SetOptions.merge()
                                     ).awaitTask()
                                     uploadedCount.incrementAndGet()
@@ -3160,8 +3162,197 @@ object SyncManager {
                     }
                 }
                 activeRegistrations.add(labAttachmentReg)
+
+                // 13. Production Logs Realtime Listener
+                val prodLogsReg = db.collection("production_logs").addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Listen failed for production_logs", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        autoSyncScope.launch {
+                            for (dc in snapshots.documentChanges) {
+                                val doc = dc.document
+                                val id = doc.id
+                                if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
+                                    val log = ProductionLog(
+                                        id = id,
+                                        formulationId = doc.getString("formulationId") ?: "",
+                                        formulationName = doc.getString("formulationName") ?: "غير مسمى",
+                                        operatorName = doc.getString("operatorName") ?: "غير محدد",
+                                        batchWeightKg = doc.getSafeDouble("batchWeightKg") ?: 0.0,
+                                        status = doc.getString("status") ?: "مكتمل",
+                                        timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                                    )
+                                    repository.insertProductionLog(log)
+                                } else if (dc.type == DocumentChange.Type.REMOVED) {
+                                    val existing = repository.productionLogs.first().find { it.id == id }
+                                    if (existing != null) {
+                                        repository.deleteProductionLog(existing)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                activeRegistrations.add(prodLogsReg)
+
+                // 14. Operational Alerts Realtime Listener
+                val alertsReg = db.collection("operational_alerts").addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Listen failed for operational_alerts", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        autoSyncScope.launch {
+                            for (dc in snapshots.documentChanges) {
+                                val doc = dc.document
+                                val id = doc.id
+                                if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
+                                    val alert = com.example.data.OperationalAlert(
+                                        id = id,
+                                        title = doc.getString("title") ?: "",
+                                        description = doc.getString("description") ?: "",
+                                        mainSection = doc.getString("mainSection") ?: "",
+                                        bindingScope = doc.getString("bindingScope") ?: "",
+                                        bindingElementName = doc.getString("bindingElementName") ?: "",
+                                        alertLevel = doc.getString("alertLevel") ?: "info",
+                                        status = doc.getString("status") ?: "ACTIVE",
+                                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                                    )
+                                    repository.insertOperationalAlert(alert)
+                                    if (dc.type == DocumentChange.Type.ADDED) {
+                                        updateIncomingSyncPrefs(context, "تم استلام تنبيه تشغيلي جديد: ${alert.title} ⚠️")
+                                    }
+                                } else if (dc.type == DocumentChange.Type.REMOVED) {
+                                    val existing = repository.allOperationalAlerts.first().find { it.id == id }
+                                    if (existing != null) {
+                                        repository.deleteOperationalAlert(existing)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                activeRegistrations.add(alertsReg)
+
+                // 15. Equipment Devices Realtime Listener
+                val equipReg = db.collection("equipment_devices").addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Listen failed for equipment_devices", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        val prefs = context.getSharedPreferences("gbr_equipment_prefs", Context.MODE_PRIVATE)
+                        for (doc in snapshots.documents) {
+                            val id = doc.getString("id") ?: doc.id
+                            val cloudName = doc.getString("name") ?: ""
+                            val cloudIp = doc.getString("ip") ?: doc.getString("deviceId") ?: ""
+                            val cloudRate = doc.getLong("updateRateMs") ?: 1000L
+                            if (id == "line-1" && cloudName.isNotBlank()) {
+                                prefs.edit()
+                                    .putString("line_1_name", cloudName)
+                                    .putString("line_1_ip", cloudIp)
+                                    .putLong("line_1_update_rate", cloudRate)
+                                    .apply()
+                            } else if (id == "line-2" && cloudName.isNotBlank()) {
+                                prefs.edit()
+                                    .putString("line_2_name", cloudName)
+                                    .putString("line_2_ip", cloudIp)
+                                    .putLong("line_2_update_rate", cloudRate)
+                                    .apply()
+                            }
+                        }
+                    }
+                }
+                activeRegistrations.add(equipReg)
+
+                // 16. Formulation Reference Specs Realtime Listener
+                val specsReg = db.collection("formulation_reference_specs").addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Listen failed for formulation_reference_specs", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        autoSyncScope.launch {
+                            for (dc in snapshots.documentChanges) {
+                                val doc = dc.document
+                                val formulationId = doc.getString("formulationId") ?: doc.id
+                                if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
+                                    val specs = FormulationReferenceSpecs(
+                                        formulationId = formulationId,
+                                        approvalDate = doc.getString("approvalDate") ?: "",
+                                        phValue = doc.getString("phValue"),
+                                        densityEmptyWeight = doc.getSafeDouble("densityEmptyWeight"),
+                                        densityFilledWeight = doc.getSafeDouble("densityFilledWeight"),
+                                        densityFinalResult = doc.getSafeDouble("densityFinalResult"),
+                                        solidWeightBefore = doc.getSafeDouble("solidWeightBefore"),
+                                        solidWeightAfter = doc.getSafeDouble("solidWeightAfter"),
+                                        solidResultPct = doc.getSafeDouble("solidResultPct"),
+                                        binderWeightBefore = doc.getSafeDouble("binderWeightBefore"),
+                                        binderWeightAfter = doc.getSafeDouble("binderWeightAfter"),
+                                        binderResultPct = doc.getSafeDouble("binderResultPct"),
+                                        viscosityJson = doc.getString("viscosityJson"),
+                                        viscosityFinalResult = doc.getSafeDouble("viscosityFinalResult"),
+                                        viscosityDilutedJson = doc.getString("viscosityDilutedJson"),
+                                        viscosityDilutedFinalResult = doc.getSafeDouble("viscosityDilutedFinalResult"),
+                                        rheologyJson = doc.getString("rheologyJson"),
+                                        rheologyIndexResult = doc.getSafeDouble("rheologyIndexResult")
+                                    )
+                                    repository.gbrDao().insertFormulationReferenceSpecs(specs)
+                                    if (dc.type == DocumentChange.Type.MODIFIED) {
+                                        updateIncomingSyncPrefs(context, "تم استلام تحديث للمواصفات القياسية والمعيارية 📐")
+                                    }
+                                } else if (dc.type == DocumentChange.Type.REMOVED) {
+                                    repository.gbrDao().deleteFormulationReferenceSpecsByFormulationId(formulationId)
+                                }
+                            }
+                        }
+                    }
+                }
+                activeRegistrations.add(specsReg)
+
+                // 17. Hosting Settings Realtime Listener
+                val hostingReg = db.collection("system_settings").document("hosting_config").addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Listen failed for hosting_config", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null && snapshot.exists()) {
+                        val cloudUrl = snapshot.getString("hostinger_gateway_url") ?: ""
+                        val cloudEnabled = snapshot.getBoolean("hostinger_enabled") ?: false
+                        val cloudLastUpdated = snapshot.getLong("hostinger_last_updated") ?: 0L
+                        val prefs = context.getSharedPreferences("gbr_prefs", Context.MODE_PRIVATE)
+                        val localLastUpdated = prefs.getLong("hostinger_last_updated", 0L)
+                        if (cloudLastUpdated > localLastUpdated) {
+                            prefs.edit()
+                                .putString("hostinger_gateway_url", cloudUrl)
+                                .putBoolean("hostinger_enabled", cloudEnabled)
+                                .putLong("hostinger_last_updated", cloudLastUpdated)
+                                .apply()
+                            com.example.ui.GbrViewModel.externalHostingUpdates.tryEmit(Pair(cloudUrl, cloudEnabled))
+                            Log.i(TAG, "Realtime Hosting config updated: url=$cloudUrl, enabled=$cloudEnabled")
+                        }
+                    }
+                }
+                activeRegistrations.add(hostingReg)
                 
-                Log.i(TAG, "Successfully attached 12 active Realtime Sync listeners to Firestore!")
+                Log.i(TAG, "Successfully attached 17 active Realtime Sync listeners to Firestore!")
                 
                 // Drain local pending queue automatically whenever realtime listeners start/restart (connection restored)
                 launch(Dispatchers.IO) {
@@ -3200,6 +3391,9 @@ object SyncManager {
             "lab_session" -> "laboratory_sessions"
             "lab_test" -> "laboratory_tests"
             "lab_attachment" -> "laboratory_attachments"
+            "production_log" -> "production_logs"
+            "operational_alert" -> "operational_alerts"
+            "formulation_reference_specs" -> "formulation_reference_specs"
             else -> type
         }
     }
@@ -3692,6 +3886,79 @@ object SyncManager {
                 )
                 db.collection("laboratory_attachments").document(id).set(payload, com.google.firebase.firestore.SetOptions.merge()).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "laboratory_attachments")
+                repository.markAsSynced(id)
+            }
+            "production_log" -> {
+                val log = repository.productionLogs.first().find { it.id == id }
+                if (log == null) {
+                    repository.deleteSyncMetadataById(id)
+                    throw Exception("سجل الإنتاج لم يعد موجوداً محلياً وتمت إزالته من السجلات المعلقة")
+                }
+                val payload = hashMapOf<String, Any>(
+                    "id" to log.id,
+                    "formulationId" to log.formulationId,
+                    "formulationName" to log.formulationName,
+                    "operatorName" to log.operatorName,
+                    "batchWeightKg" to log.batchWeightKg,
+                    "status" to log.status,
+                    "timestamp" to log.timestamp,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
+                )
+                db.collection("production_logs").document(id).set(payload, SetOptions.merge()).awaitTask()
+                WriteDiagnostics.recordWrite(ctx, "production_logs")
+                repository.markAsSynced(id)
+            }
+            "operational_alert" -> {
+                val alert = repository.allOperationalAlerts.first().find { it.id == id }
+                if (alert == null) {
+                    repository.deleteSyncMetadataById(id)
+                    throw Exception("التنبيه التشغيلي لم يعد موجوداً محلياً وتمت إزالته من السجلات المعلقة")
+                }
+                val payload = hashMapOf<String, Any?>(
+                    "id" to alert.id,
+                    "title" to alert.title,
+                    "description" to alert.description,
+                    "mainSection" to alert.mainSection,
+                    "bindingScope" to alert.bindingScope,
+                    "bindingElementName" to alert.bindingElementName,
+                    "alertLevel" to alert.alertLevel,
+                    "status" to alert.status,
+                    "createdAt" to alert.createdAt,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
+                )
+                db.collection("operational_alerts").document(id).set(payload, SetOptions.merge()).awaitTask()
+                WriteDiagnostics.recordWrite(ctx, "operational_alerts")
+                repository.markAsSynced(id)
+            }
+            "formulation_reference_specs" -> {
+                val specs = repository.getFormulationReferenceSpecsSync(id)
+                if (specs == null) {
+                    repository.deleteSyncMetadataById(id)
+                    throw Exception("المواصفات القياسية لم تعد موجودة محلياً وتمت إزالتها من السجلات المعلقة")
+                }
+                val payload = hashMapOf<String, Any?>(
+                    "formulationId" to specs.formulationId,
+                    "approvalDate" to specs.approvalDate,
+                    "phValue" to specs.phValue,
+                    "densityEmptyWeight" to specs.densityEmptyWeight,
+                    "densityFilledWeight" to specs.densityFilledWeight,
+                    "densityFinalResult" to specs.densityFinalResult,
+                    "solidWeightBefore" to specs.solidWeightBefore,
+                    "solidWeightAfter" to specs.solidWeightAfter,
+                    "solidResultPct" to specs.solidResultPct,
+                    "binderWeightBefore" to specs.binderWeightBefore,
+                    "binderWeightAfter" to specs.binderWeightAfter,
+                    "binderResultPct" to specs.binderResultPct,
+                    "viscosityJson" to specs.viscosityJson,
+                    "viscosityFinalResult" to specs.viscosityFinalResult,
+                    "viscosityDilutedJson" to specs.viscosityDilutedJson,
+                    "viscosityDilutedFinalResult" to specs.viscosityDilutedFinalResult,
+                    "rheologyJson" to specs.rheologyJson,
+                    "rheologyIndexResult" to specs.rheologyIndexResult,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
+                )
+                db.collection("formulation_reference_specs").document(id).set(payload, SetOptions.merge()).awaitTask()
+                WriteDiagnostics.recordWrite(ctx, "formulation_reference_specs")
                 repository.markAsSynced(id)
             }
         }
@@ -4957,7 +5224,8 @@ object SyncManager {
                                 "operatorName" to log.operatorName,
                                 "batchWeightKg" to log.batchWeightKg,
                                 "status" to log.status,
-                                "timestamp" to log.timestamp
+                                "timestamp" to log.timestamp,
+                                "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                             ), SetOptions.merge()
                         ).awaitTask()
                         WriteDiagnostics.recordWrite(context, "production_logs")

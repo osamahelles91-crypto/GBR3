@@ -7706,40 +7706,6 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
         if (!prefs.contains("line_1_name")) {
             saveLines(context, "خط الإنتاج 1", "", 1000L, "خط الإنتاج 2", "", 1000L)
         }
-
-        // Fetch / Listen for equipment lines from Cloud Firestore to keep devices in sync across all devices
-        try {
-            val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-            db.collection("equipment_devices").addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null) return@addSnapshotListener
-                for (doc in snapshot.documents) {
-                    val id = doc.getString("id") ?: doc.id
-                    val cName = doc.getString("name") ?: ""
-                    val cIp = doc.getString("ip") ?: doc.getString("deviceId") ?: ""
-                    val cRate = doc.getLong("updateRateMs") ?: (doc.getString("regionName")?.toLongOrNull()) ?: 1000L
-
-                    if (id == "line-1") {
-                        if (cName.isNotBlank()) line1Name = cName
-                        if (cIp.isNotBlank()) line1Ip = cIp
-                        if (cRate > 0) line1UpdateRate = cRate
-                        prefs.edit()
-                            .putString("line_1_name", line1Name)
-                            .putString("line_1_ip", line1Ip)
-                            .putLong("line_1_update_rate", line1UpdateRate)
-                            .apply()
-                    } else if (id == "line-2") {
-                        if (cName.isNotBlank()) line2Name = cName
-                        if (cIp.isNotBlank()) line2Ip = cIp
-                        if (cRate > 0) line2UpdateRate = cRate
-                        prefs.edit()
-                            .putString("line_2_name", line2Name)
-                            .putString("line_2_ip", line2Ip)
-                            .putLong("line_2_update_rate", line2UpdateRate)
-                            .apply()
-                    }
-                }
-            }
-        } catch (_: Exception) {}
     }
 
     // Tab switcher state: 0 for Line 1, 1 for Line 2

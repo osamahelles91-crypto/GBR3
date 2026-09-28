@@ -417,15 +417,22 @@ object DeviceSecurityManager {
             Log.e(TAG, "Failed starting Firestore snapshot listener", e)
         }
 
-        // Secondary periodic fast check (every 3 seconds) for guaranteed synchronization & offline timeout enforcement
+        // Periodic check: local offline check every 3s (0 network cost), cloud verification every 5 min (30s if not approved)
         backgroundStatusJob = CoroutineScope(Dispatchers.IO).launch {
+            var lastCloudCheckTime = 0L
             while (isActive) {
                 kotlinx.coroutines.delay(3000)
                 if (isCloudConfigured(ctx)) {
                     try {
                         val prevStatus = _deviceStatus.value
-                        val newStatus = if (SyncManager.isNetworkAvailable(ctx)) {
-                            verifyDeviceStatus(ctx)
+                        val now = System.currentTimeMillis()
+                        val isApproved = (prevStatus == STATUS_APPROVED)
+                        val cloudInterval = if (isApproved) (5 * 60 * 1000L) else (30 * 1000L)
+                        val shouldCheckCloud = SyncManager.isNetworkAvailable(ctx) && (now - lastCloudCheckTime >= cloudInterval)
+
+                        val newStatus = if (shouldCheckCloud) {
+                            lastCloudCheckTime = now
+                            verifyDeviceStatus(ctx, forceOfflineCheck = false)
                         } else {
                             verifyDeviceStatus(ctx, forceOfflineCheck = true)
                         }

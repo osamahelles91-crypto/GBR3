@@ -1557,7 +1557,8 @@ class GbrViewModel(application: Application) : AndroidViewModel(application) {
                     liveDbState.value = "local_only"
                     liveDbMessage.value = "أنت تعمل الآن بالوضع المحلي الآمن بالكامل (Offline) 📴"
                 }
-                kotlinx.coroutines.delay(30000)
+                val healthIntervalMs = System.getProperty("gbr.cloud.health.interval.ms")?.toLongOrNull() ?: (24 * 60 * 60 * 1000L) // Safety net full-sync every 24 hours
+                kotlinx.coroutines.delay(healthIntervalMs)
             }
         }
     }

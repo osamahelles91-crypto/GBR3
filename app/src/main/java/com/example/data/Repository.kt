@@ -89,15 +89,19 @@ class GbrRepository(private val gbrDao: GbrDao, private val context: android.con
 
     suspend fun insertProductionLog(log: ProductionLog): String = withContext(Dispatchers.IO) {
         gbrDao.insertProductionLog(log)
+        logSyncChange(log.id, "production_log")
         log.id
     }
 
     suspend fun updateProductionLog(log: ProductionLog) = withContext(Dispatchers.IO) {
         gbrDao.updateProductionLog(log)
+        logSyncChange(log.id, "production_log")
     }
 
     suspend fun deleteProductionLog(log: ProductionLog) = withContext(Dispatchers.IO) {
         gbrDao.deleteProductionLog(log)
+        deleteSyncMetadataById(log.id)
+        SyncManager.deleteSingleEntityAsync(context, log.id, "production_log")
     }
 
     fun getPriceHistoryForMaterial(rawMaterialId: String): Flow<List<PriceHistoryEntry>> {
@@ -655,16 +659,19 @@ class GbrRepository(private val gbrDao: GbrDao, private val context: android.con
 
     suspend fun insertFormulationReferenceSpecs(specs: FormulationReferenceSpecs): Unit = withContext(Dispatchers.IO) {
         gbrDao.insertFormulationReferenceSpecs(specs)
+        logSyncChange(specs.formulationId, "formulation_reference_specs")
     }
 
     suspend fun deleteFormulationReferenceSpecs(specs: FormulationReferenceSpecs): Unit = withContext(Dispatchers.IO) {
         gbrDao.deleteFormulationReferenceSpecs(specs)
+        deleteSyncMetadataById(specs.formulationId)
+        SyncManager.deleteSingleEntityAsync(context, specs.formulationId, "formulation_reference_specs")
     }
 
     suspend fun deleteFormulationReferenceSpecsByFormulationId(formulationId: String): Unit = withContext(Dispatchers.IO) {
         gbrDao.deleteFormulationReferenceSpecsByFormulationId(formulationId)
-        logSyncChange(formulationId, "formulation")
-        SyncManager.uploadSingleEntityAsync(context, this@GbrRepository, formulationId, "formulation")
+        deleteSyncMetadataById(formulationId)
+        SyncManager.deleteSingleEntityAsync(context, formulationId, "formulation_reference_specs")
     }
 
     // --- OPERATIONAL ALERTS ---
@@ -672,15 +679,19 @@ class GbrRepository(private val gbrDao: GbrDao, private val context: android.con
 
     suspend fun insertOperationalAlert(alert: OperationalAlert): String = withContext(Dispatchers.IO) {
         gbrDao.insertOperationalAlert(alert)
+        logSyncChange(alert.id, "operational_alert")
         alert.id
     }
 
     suspend fun updateOperationalAlert(alert: OperationalAlert): Unit = withContext(Dispatchers.IO) {
         gbrDao.updateOperationalAlert(alert)
+        logSyncChange(alert.id, "operational_alert")
     }
 
     suspend fun deleteOperationalAlert(alert: OperationalAlert): Unit = withContext(Dispatchers.IO) {
         gbrDao.deleteOperationalAlert(alert)
+        deleteSyncMetadataById(alert.id)
+        SyncManager.deleteSingleEntityAsync(context, alert.id, "operational_alert")
     }
 
     // --- RECYCLE BIN ---
