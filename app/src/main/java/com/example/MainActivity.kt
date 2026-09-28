@@ -529,6 +529,8 @@ fun GbrAppContainer(
 
     // Automatically trigger alert dialog when new pending device appears
     LaunchedEffect(pendingDevicesList) {
+        val currentPendingIds = pendingDevicesList.map { it.deviceId }.toSet()
+        shownDevicePopups.value = shownDevicePopups.value.intersect(currentPendingIds)
         if (pendingDevicesList.isNotEmpty()) {
             val unshown = pendingDevicesList.firstOrNull { !shownDevicePopups.value.contains(it.deviceId) }
             if (unshown != null) {
@@ -17558,6 +17560,15 @@ fun SettingsPanel(viewModel: GbrViewModel) {
         )
     }
 
+    // System Back Button Handling for Settings Subviews
+    BackHandler(enabled = selectedSettingSection != null) {
+        if (selectedSettingSection == "قاعدة البيانات" && hasUnsavedChangesInSubView) {
+            showUnsavedChangesWarningDialogInSubView = true
+        } else {
+            selectedSettingSection = null
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -22670,7 +22681,12 @@ fun DatabaseSettingsSubView(viewModel: GbrViewModel) {
                                         scope.launch(Dispatchers.IO) {
                                             val initSuccess = SyncManager.initializeFirebase(context)
                                             if (initSuccess) {
-                                                com.example.data.DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                                                val isLocalPrimary = context.getSharedPreferences("gbr_device_security_prefs", android.content.Context.MODE_PRIVATE).getBoolean("is_primary", false)
+                                                if (isLocalPrimary) {
+                                                    com.example.data.DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                                                } else {
+                                                    com.example.data.DeviceSecurityManager.sendRegistrationRequestToCloud(context)
+                                                }
                                                 com.example.data.DeviceSecurityManager.startRealtimeStatusListener(context)
                                                 val status = com.example.data.DeviceSecurityManager.verifyDeviceStatus(context)
                                                 if (status == com.example.data.DeviceSecurityManager.STATUS_APPROVED) {
@@ -25917,7 +25933,12 @@ fun DatabaseSettingsSubView_OLD(viewModel: GbrViewModel) {
                                         scope.launch(Dispatchers.IO) {
                                             val initSuccess = SyncManager.initializeFirebase(context)
                                             if (initSuccess) {
-                                                com.example.data.DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                                                val isLocalPrimary = context.getSharedPreferences("gbr_device_security_prefs", android.content.Context.MODE_PRIVATE).getBoolean("is_primary", false)
+                                                if (isLocalPrimary) {
+                                                    com.example.data.DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                                                } else {
+                                                    com.example.data.DeviceSecurityManager.sendRegistrationRequestToCloud(context)
+                                                }
                                                 com.example.data.DeviceSecurityManager.startRealtimeStatusListener(context)
                                                 val status = com.example.data.DeviceSecurityManager.verifyDeviceStatus(context)
                                                 withContext(Dispatchers.Main) {

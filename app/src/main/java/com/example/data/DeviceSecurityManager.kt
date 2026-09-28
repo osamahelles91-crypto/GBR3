@@ -11,6 +11,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
@@ -399,6 +401,16 @@ object DeviceSecurityManager {
                             updateDeviceStatusLocally(ctx, normalizedStatus, remoteIsPrimary)
                             statusChangeCallback?.invoke(normalizedStatus)
                         }
+                    } else if (snapshot != null && !snapshot.exists()) {
+                        if (!cachedPrimary && !_isPrimary.value) {
+                            // Only block and wipe if device was actively APPROVED before deletion!
+                            // If it's PENDING or re-registering, a missing doc means it's awaiting registration.
+                            if (_deviceStatus.value == STATUS_APPROVED) {
+                                Log.i(TAG, "Active device registration deleted by admin from Firestore. Setting BLOCKED status.")
+                                updateDeviceStatusLocally(ctx, STATUS_BLOCKED, false)
+                                statusChangeCallback?.invoke(STATUS_BLOCKED)
+                            }
+                        }
                     }
                 }
         } catch (e: Exception) {
@@ -460,112 +472,46 @@ object DeviceSecurityManager {
                 || product.contains("simulator")
     }
 
-    // Ensure device is written to Firestore and registered
-    suspend fun ensureDeviceRegisteredOnCloud(context: Context, forceStatus: String? = null): Boolean {
+    // Dedicated function to explicitly submit an authorization/approval request to the admin
+    suspend fun sendRegistrationRequestToCloud(context: Context): Boolean = withContext(Dispatchers.IO) {
         val ctx = context.applicationContext
         appContext = ctx
         if (!SyncManager.initializeFirebase(ctx)) {
-            Log.w(TAG, "Cannot ensure registration: Firebase not initialized")
-            return false
+            Log.w(TAG, "Cannot send registration request: Firebase not initialized")
+            return@withContext false
         }
-        return try {
-            // Attempt anonymous auth if enabled in project rules
-            try {
-                val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                if (auth.currentUser == null) {
-                    auth.signInAnonymously().awaitTask()
-                }
-            } catch (authEx: Exception) {
-                Log.w(TAG, "Anonymous auth skipped/failed: ${authEx.message}")
-            }
-
-            val db = FirebaseFirestore.getInstance()
-            val myId = getDeviceId(ctx)
-            val myName = getDeviceName(ctx)
-            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val isLocalPrimary = prefs.getBoolean("is_primary", false)
-            val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-
-            val docRef = db.collection("device_registrations").document(myId)
-            val docSnap = try { docRef.get().awaitTask() } catch (e: Exception) { null }
-
-            var targetStatus: String
-            var targetIsPrimary: Boolean
-
-            if (docSnap != null && docSnap.exists()) {
-                val remoteStatus = (docSnap.getString("status") ?: STATUS_PENDING).trim()
-                val remoteIsPrimary = docSnap.getBoolean("isPrimary") ?: false
-
-                val isBlocked = remoteStatus.equals(STATUS_BLOCKED, ignoreCase = true) ||
-                                remoteStatus.equals("BLOCKED", ignoreCase = true) ||
-                                remoteStatus.equals("DELETED", ignoreCase = true) ||
-                                remoteStatus == "محظور" ||
-                                remoteStatus == "محذوف"
-                val isSuspended = remoteStatus.equals(STATUS_SUSPENDED, ignoreCase = true) ||
-                                  remoteStatus.equals("SUSPENDED", ignoreCase = true) ||
-                                  remoteStatus == "موقوف"
-                val isApproved = remoteStatus.equals(STATUS_APPROVED, ignoreCase = true) ||
-                                 remoteStatus.equals("APPROVED", ignoreCase = true) ||
-                                 remoteStatus == "معتمد"
-
-                val normalizedStatus = when {
-                    isBlocked -> STATUS_BLOCKED
-                    isSuspended -> STATUS_SUSPENDED
-                    isApproved -> STATUS_APPROVED
-                    else -> STATUS_PENDING
-                }
-
-                targetStatus = forceStatus ?: normalizedStatus
-                targetIsPrimary = if (isLocalPrimary) true else remoteIsPrimary
-            } else {
-                if (isLocalPrimary) {
-                    targetStatus = forceStatus ?: STATUS_APPROVED
-                    targetIsPrimary = true
-                } else {
-                    // Check if other devices exist on Firestore
-                    val allDevicesSnap = try { db.collection("device_registrations").limit(5).get().awaitTask() } catch (e: Exception) { null }
-                    val hasExistingOtherDevices = allDevicesSnap != null && allDevicesSnap.documents.any { it.id != myId }
-                    val secDocSnap = try { db.collection("settings").document("device_security").get().awaitTask() } catch (e: Exception) { null }
-                    val hasSystemSecurity = secDocSnap != null && secDocSnap.exists()
-
-                    if (!hasExistingOtherDevices && !hasSystemSecurity) {
-                        // Very first device setup: make primary admin
-                        targetStatus = STATUS_APPROVED
-                        targetIsPrimary = true
-                        val recoveryKey = "GBR-A3ZR-T3V5-H6CM-3TRJ"
-                        val secPayload = hashMapOf<String, Any>(
-                            "recoveryKey" to hashString(recoveryKey),
-                            "activeSecurityEmail" to "osama.helles91@gmail.com",
-                            "setupAt" to nowStr
-                        )
-                        try {
-                            db.collection("settings").document("device_security").set(secPayload, SetOptions.merge()).awaitTask()
-                        } catch (_: Exception) {}
-                        _masterRecoveryKey.value = recoveryKey
-                    } else {
-                        targetStatus = forceStatus ?: STATUS_PENDING
-                        targetIsPrimary = false
+        return@withContext try {
+            withTimeout(10000L) {
+                try {
+                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    if (auth.currentUser == null) {
+                        auth.signInAnonymously().awaitTask()
                     }
+                } catch (authEx: Exception) {
+                    Log.w(TAG, "Anonymous auth skipped/failed: ${authEx.message}")
                 }
-            }
 
-            val devicePayload = hashMapOf<String, Any>(
-                "deviceId" to myId,
-                "deviceName" to myName,
-                "registeredAt" to (docSnap?.getString("registeredAt") ?: nowStr),
-                "lastActive" to nowStr,
-                "status" to targetStatus,
-                "isPrimary" to targetIsPrimary,
-                "model" to (Build.MODEL ?: ""),
-                "manufacturer" to (Build.MANUFACTURER ?: "")
-            )
-            if (targetStatus == STATUS_APPROVED) {
-                devicePayload["approvedAt"] = docSnap?.getString("approvedAt") ?: nowStr
-            }
+                val db = FirebaseFirestore.getInstance()
+                val myId = getDeviceId(ctx)
+                val myName = getDeviceName(ctx)
+                val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
 
-            db.collection("device_registrations").document(myId).set(devicePayload, SetOptions.merge()).awaitTask()
+                val devicePayload = hashMapOf<String, Any>(
+                    "deviceId" to myId,
+                    "deviceName" to myName,
+                    "registeredAt" to nowStr,
+                    "lastActive" to nowStr,
+                    "status" to STATUS_PENDING,
+                    "isPrimary" to false,
+                    "model" to (Build.MODEL ?: ""),
+                    "manufacturer" to (Build.MANUFACTURER ?: "")
+                )
 
-            if (targetStatus == STATUS_PENDING) {
+                // Overwrite device registration to PENDING on cloud (replaces any previous blocked/deleted/suspended status)
+                db.collection("device_registrations").document(myId)
+                    .set(devicePayload).awaitTask()
+
+                // Insert/activate operational alert for admin so admin phone gets immediate alert
                 try {
                     val alertPayload = hashMapOf<String, Any>(
                         "id" to "device_alert_$myId",
@@ -578,30 +524,178 @@ object DeviceSecurityManager {
                         "createdAt" to System.currentTimeMillis(),
                         "targetDeviceId" to myId
                     )
-                    db.collection("operational_alerts").document("device_alert_$myId").set(alertPayload, SetOptions.merge()).awaitTask()
+                    db.collection("operational_alerts").document("device_alert_$myId")
+                        .set(alertPayload, SetOptions.merge()).awaitTask()
                 } catch (ae: Exception) {
                     Log.e(TAG, "Failed inserting operational alert on Firestore", ae)
                 }
-            } else if (targetStatus == STATUS_APPROVED || targetStatus == STATUS_BLOCKED) {
+
+                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putString("cached_status", STATUS_PENDING)
+                    .putLong("last_verified_timestamp", System.currentTimeMillis())
+                    .putBoolean("is_primary", false)
+                    .apply()
+
+                _isPrimary.value = false
+                _deviceStatus.value = STATUS_PENDING
+                notifiedPendingDeviceIds.remove(myId)
+                Log.i(TAG, "sendRegistrationRequestToCloud successfully sent for $myId")
+                true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in sendRegistrationRequestToCloud", e)
+            false
+        }
+    }
+
+    // Ensure device is written to Firestore and registered
+    suspend fun ensureDeviceRegisteredOnCloud(context: Context, forceStatus: String? = null): Boolean = withContext(Dispatchers.IO) {
+        val ctx = context.applicationContext
+        appContext = ctx
+        if (!SyncManager.initializeFirebase(ctx)) {
+            Log.w(TAG, "Cannot ensure registration: Firebase not initialized")
+            return@withContext false
+        }
+        return@withContext try {
+            withTimeout(10000L) {
+                // Attempt anonymous auth if enabled in project rules
                 try {
-                    db.collection("operational_alerts").document("device_alert_$myId").delete().awaitTask()
-                } catch (_: Exception) {}
+                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    if (auth.currentUser == null) {
+                        auth.signInAnonymously().awaitTask()
+                    }
+                } catch (authEx: Exception) {
+                    Log.w(TAG, "Anonymous auth skipped/failed: ${authEx.message}")
+                }
+
+                val db = FirebaseFirestore.getInstance()
+                val myId = getDeviceId(ctx)
+                val myName = getDeviceName(ctx)
+                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val isLocalPrimary = prefs.getBoolean("is_primary", false)
+                val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+
+                val docRef = db.collection("device_registrations").document(myId)
+                val docSnap = try { docRef.get().awaitTask() } catch (e: Exception) { null }
+
+                var targetStatus: String
+                var targetIsPrimary: Boolean
+
+                if (docSnap != null && docSnap.exists()) {
+                    val remoteStatus = (docSnap.getString("status") ?: STATUS_PENDING).trim()
+                    val remoteIsPrimary = docSnap.getBoolean("isPrimary") ?: false
+                    val hasDeletedAt = docSnap.getString("deletedAt") != null
+
+                    val isBlocked = remoteStatus.equals(STATUS_BLOCKED, ignoreCase = true) ||
+                                    remoteStatus.equals("BLOCKED", ignoreCase = true) ||
+                                    remoteStatus.equals("DELETED", ignoreCase = true) ||
+                                    remoteStatus == "محظور" ||
+                                    remoteStatus == "محذوف"
+                    val isSuspended = remoteStatus.equals(STATUS_SUSPENDED, ignoreCase = true) ||
+                                      remoteStatus.equals("SUSPENDED", ignoreCase = true) ||
+                                      remoteStatus == "موقوف"
+                    val isApproved = remoteStatus.equals(STATUS_APPROVED, ignoreCase = true) ||
+                                     remoteStatus.equals("APPROVED", ignoreCase = true) ||
+                                     remoteStatus == "معتمد"
+
+                    val normalizedStatus = when {
+                        // If device was previously deleted, treat connection as fresh PENDING request
+                        hasDeletedAt || remoteStatus.equals("DELETED", ignoreCase = true) -> STATUS_PENDING
+                        isApproved -> STATUS_APPROVED
+                        isSuspended -> STATUS_SUSPENDED
+                        isBlocked -> STATUS_BLOCKED
+                        else -> STATUS_PENDING
+                    }
+
+                    targetStatus = forceStatus ?: normalizedStatus
+                    targetIsPrimary = if (isLocalPrimary) true else remoteIsPrimary
+                } else {
+                    if (isLocalPrimary) {
+                        targetStatus = forceStatus ?: STATUS_APPROVED
+                        targetIsPrimary = true
+                    } else {
+                        // Check if other devices exist on Firestore
+                        val allDevicesSnap = try { db.collection("device_registrations").limit(5).get().awaitTask() } catch (e: Exception) { null }
+                        val hasExistingOtherDevices = allDevicesSnap != null && allDevicesSnap.documents.any { it.id != myId }
+                        val secDocSnap = try { db.collection("settings").document("device_security").get().awaitTask() } catch (e: Exception) { null }
+                        val hasSystemSecurity = secDocSnap != null && secDocSnap.exists()
+
+                        if (!hasExistingOtherDevices && !hasSystemSecurity) {
+                            // Very first device setup: make primary admin
+                            targetStatus = STATUS_APPROVED
+                            targetIsPrimary = true
+                            val recoveryKey = "GBR-A3ZR-T3V5-H6CM-3TRJ"
+                            val secPayload = hashMapOf<String, Any>(
+                                "recoveryKey" to hashString(recoveryKey),
+                                "activeSecurityEmail" to "osama.helles91@gmail.com",
+                                "setupAt" to nowStr
+                            )
+                            try {
+                                db.collection("settings").document("device_security").set(secPayload, SetOptions.merge()).awaitTask()
+                            } catch (_: Exception) {}
+                            _masterRecoveryKey.value = recoveryKey
+                        } else {
+                            targetStatus = forceStatus ?: STATUS_PENDING
+                            targetIsPrimary = false
+                        }
+                    }
+                }
+
+                val devicePayload = hashMapOf<String, Any>(
+                    "deviceId" to myId,
+                    "deviceName" to myName,
+                    "registeredAt" to (docSnap?.getString("registeredAt") ?: nowStr),
+                    "lastActive" to nowStr,
+                    "status" to targetStatus,
+                    "isPrimary" to targetIsPrimary,
+                    "model" to (Build.MODEL ?: ""),
+                    "manufacturer" to (Build.MANUFACTURER ?: "")
+                )
+                if (targetStatus == STATUS_APPROVED) {
+                    devicePayload["approvedAt"] = docSnap?.getString("approvedAt") ?: nowStr
+                }
+
+                db.collection("device_registrations").document(myId).set(devicePayload, SetOptions.merge()).awaitTask()
+
+                if (targetStatus == STATUS_PENDING) {
+                    try {
+                        val alertPayload = hashMapOf<String, Any>(
+                            "id" to "device_alert_$myId",
+                            "title" to "جهاز جديد يطلب المزامنة 🔌",
+                            "description" to "تم رصد جهاز جديد يتصل بالنظام ويطلب الاعتماد: $myName",
+                            "mainSection" to "عام",
+                            "bindingScope" to "ALL",
+                            "alertLevel" to "WARNING",
+                            "status" to "ACTIVE",
+                            "createdAt" to System.currentTimeMillis(),
+                            "targetDeviceId" to myId
+                        )
+                        db.collection("operational_alerts").document("device_alert_$myId").set(alertPayload, SetOptions.merge()).awaitTask()
+                    } catch (ae: Exception) {
+                        Log.e(TAG, "Failed inserting operational alert on Firestore", ae)
+                    }
+                } else if (targetStatus == STATUS_APPROVED) {
+                    try {
+                        db.collection("operational_alerts").document("device_alert_$myId").delete().awaitTask()
+                    } catch (_: Exception) {}
+                }
+
+                if (targetStatus == STATUS_BLOCKED) {
+                    wipeDeviceData(ctx)
+                }
+
+                prefs.edit()
+                    .putString("cached_status", targetStatus)
+                    .putLong("last_verified_timestamp", System.currentTimeMillis())
+                    .putBoolean("is_primary", targetIsPrimary)
+                    .apply()
+
+                _isPrimary.value = targetIsPrimary
+                _deviceStatus.value = targetStatus
+                Log.i(TAG, "ensureDeviceRegisteredOnCloud completed successfully for $myId with status $targetStatus")
+                true
             }
-
-            if (targetStatus == STATUS_BLOCKED) {
-                wipeDeviceData(ctx)
-            }
-
-            prefs.edit()
-                .putString("cached_status", targetStatus)
-                .putLong("last_verified_timestamp", System.currentTimeMillis())
-                .putBoolean("is_primary", targetIsPrimary)
-                .apply()
-
-            _isPrimary.value = targetIsPrimary
-            _deviceStatus.value = targetStatus
-            Log.i(TAG, "ensureDeviceRegisteredOnCloud completed successfully for $myId with status $targetStatus")
-            true
         } catch (e: Exception) {
             Log.e(TAG, "Error in ensureDeviceRegisteredOnCloud", e)
             false
@@ -939,34 +1033,36 @@ object DeviceSecurityManager {
         }
     }
 
-    suspend fun deleteDeviceFromCloud(context: Context, targetDeviceId: String): Boolean {
+    suspend fun deleteDeviceFromCloud(context: Context, targetDeviceId: String): Boolean = withContext(Dispatchers.IO) {
         if (!isCloudConfigured(context) || !SyncManager.isNetworkAvailable(context) || !SyncManager.initializeFirebase(context)) {
-            return false
+            return@withContext false
         }
-        return try {
-            val db = FirebaseFirestore.getInstance()
-            // First mark as BLOCKED so active snapshot listeners on target phone trigger immediate wipe
-            val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            db.collection("device_registrations").document(targetDeviceId)
-                .set(hashMapOf<String, Any>(
-                    "status" to STATUS_BLOCKED,
-                    "isPrimary" to false,
-                    "deletedAt" to nowStr,
-                    "lastActive" to nowStr
-                ), SetOptions.merge()).awaitTask()
+        val cleanId = targetDeviceId.trim()
+        if (cleanId.isBlank()) return@withContext false
 
-            // Delete associated operational alert if any
-            try {
-                db.collection("operational_alerts").document("device_alert_$targetDeviceId").delete().awaitTask()
-            } catch (ae: Exception) {
-                Log.e(TAG, "Failed deleting operational alert for $targetDeviceId", ae)
+        return@withContext try {
+            withTimeout(7000L) {
+                val db = FirebaseFirestore.getInstance()
+                // Delete associated operational alert if any
+                try {
+                    db.collection("operational_alerts").document("device_alert_$cleanId").delete().awaitTask()
+                } catch (ae: Exception) {
+                    Log.e(TAG, "Failed deleting operational alert for $cleanId", ae)
+                }
+
+                // Delete the registration document from Firestore
+                try {
+                    db.collection("device_registrations").document(cleanId).delete().awaitTask()
+                } catch (de: Exception) {
+                    Log.e(TAG, "Failed deleting registration doc on Firestore: $cleanId", de)
+                }
+
+                _pendingDevices.value = _pendingDevices.value.filter { it.deviceId != cleanId }
+                notifiedPendingDeviceIds.remove(cleanId)
+                true
             }
-
-            // Also delete the registration document from Firestore
-            db.collection("device_registrations").document(targetDeviceId).delete().awaitTask()
-            true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete device from cloud: $targetDeviceId", e)
+            Log.e(TAG, "Failed to delete device from cloud: $cleanId", e)
             false
         }
     }
@@ -991,37 +1087,44 @@ object DeviceSecurityManager {
         return false
     }
 
-    suspend fun updateDeviceStatusOnCloud(context: Context, targetDeviceId: String, newStatus: String, isPrimaryVal: Boolean = false): Boolean {
+    suspend fun updateDeviceStatusOnCloud(context: Context, targetDeviceId: String, newStatus: String, isPrimaryVal: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         if (!SyncManager.initializeFirebase(context)) {
-            return false
+            return@withContext false
         }
-        return try {
-            val db = FirebaseFirestore.getInstance()
-            val updates = hashMapOf<String, Any>(
-                "status" to newStatus,
-                "isPrimary" to isPrimaryVal
-            )
-            val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            updates["lastActive"] = nowStr
-            if (newStatus == STATUS_APPROVED) {
-                updates["approvedAt"] = nowStr
-            }
-            db.collection("device_registrations").document(targetDeviceId)
-                .set(updates, SetOptions.merge()).awaitTask()
-            
-            // Clean up operational alert if no longer pending
-            if (newStatus != STATUS_PENDING) {
-                try {
-                    db.collection("operational_alerts").document("device_alert_$targetDeviceId").delete().awaitTask()
-                } catch (ae: Exception) {
-                    Log.e(TAG, "Failed deleting operational alert for $targetDeviceId", ae)
+        val cleanId = targetDeviceId.trim()
+        if (cleanId.isBlank()) return@withContext false
+
+        return@withContext try {
+            withTimeout(7000L) {
+                val db = FirebaseFirestore.getInstance()
+                val updates = hashMapOf<String, Any>(
+                    "status" to newStatus,
+                    "isPrimary" to isPrimaryVal
+                )
+                val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                updates["lastActive"] = nowStr
+                when (newStatus) {
+                    STATUS_APPROVED -> updates["approvedAt"] = nowStr
+                    STATUS_SUSPENDED -> updates["suspendedAt"] = nowStr
+                    STATUS_BLOCKED -> updates["blockedAt"] = nowStr
                 }
+                db.collection("device_registrations").document(cleanId)
+                    .set(updates, SetOptions.merge()).awaitTask()
+                
+                // Clean up operational alert if no longer pending
+                if (newStatus != STATUS_PENDING) {
+                    try {
+                        db.collection("operational_alerts").document("device_alert_$cleanId").delete().awaitTask()
+                    } catch (ae: Exception) {
+                        Log.e(TAG, "Failed deleting operational alert for $cleanId", ae)
+                    }
+                }
+                // Update local StateFlow
+                _pendingDevices.value = _pendingDevices.value.filter { it.deviceId != cleanId }
+                true
             }
-            // Update local StateFlow
-            _pendingDevices.value = _pendingDevices.value.filter { it.deviceId != targetDeviceId }
-            true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to update device status on cloud for $targetDeviceId", e)
+            Log.e(TAG, "Failed to update device status on cloud for $cleanId", e)
             false
         }
     }
@@ -1194,7 +1297,11 @@ object DeviceSecurityManager {
                         
                         // Periodic direct check (in case snapshot listener was dropped or slow)
                         try {
-                            val querySnap = db.collection("device_registrations").get().awaitTask()
+                            val querySnap = try {
+                                db.collection("device_registrations").get(com.google.firebase.firestore.Source.SERVER).awaitTask()
+                            } catch (_: Exception) {
+                                db.collection("device_registrations").get().awaitTask()
+                            }
                             val pendingList = mutableListOf<PendingDeviceRegistration>()
                             val currentIds = mutableSetOf<String>()
                             for (doc in querySnap.documents) {
@@ -1244,7 +1351,7 @@ object DeviceSecurityManager {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in admin pending devices monitor", e)
                 }
-                kotlinx.coroutines.delay(3000) // Fast poll every 3 seconds
+                kotlinx.coroutines.delay(10 * 60 * 1000L) // Infrequent fallback check (real-time updates are driven by snapshot listener)
             }
         }
     }

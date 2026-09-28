@@ -25,6 +25,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeout
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,9 +70,14 @@ fun DeviceSecurityBlockScreen(onVerified: () -> Unit) {
         var pollJob: kotlinx.coroutines.Job? = null
         if (SyncManager.initializeFirebase(context)) {
             try {
-                // Immediately ensure registration document is pushed to Firestore
+                // Immediately submit or ensure registration document is pushed to Firestore
                 scope.launch(Dispatchers.IO) {
-                    DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                    val isPrimaryLocal = context.getSharedPreferences("gbr_device_security_prefs", Context.MODE_PRIVATE).getBoolean("is_primary", false)
+                    if (isPrimaryLocal) {
+                        DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                    } else {
+                        DeviceSecurityManager.sendRegistrationRequestToCloud(context)
+                    }
                 }
 
                 val db = FirebaseFirestore.getInstance()
@@ -92,12 +100,11 @@ fun DeviceSecurityBlockScreen(onVerified: () -> Unit) {
                         }
                     }
                 
-                // Secondary fallback fast polling loop
+                // Secondary fallback polling loop (low frequency)
                 pollJob = scope.launch(Dispatchers.IO) {
                     while (true) {
-                        kotlinx.coroutines.delay(3000)
+                        kotlinx.coroutines.delay(60000)
                         try {
-                            DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
                             val status = DeviceSecurityManager.verifyDeviceStatus(context)
                             if (status == DeviceSecurityManager.STATUS_APPROVED) {
                                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -325,7 +332,7 @@ fun DeviceSecurityBlockScreen(onVerified: () -> Unit) {
                                 onClick = {
                                     scope.launch {
                                         isChecking = true
-                                        val registered = DeviceSecurityManager.ensureDeviceRegisteredOnCloud(context)
+                                        val sent = DeviceSecurityManager.sendRegistrationRequestToCloud(context)
                                         val status = DeviceSecurityManager.verifyDeviceStatus(context)
                                         isChecking = false
                                         if (status == DeviceSecurityManager.STATUS_APPROVED) {
@@ -333,10 +340,10 @@ fun DeviceSecurityBlockScreen(onVerified: () -> Unit) {
                                             DeviceSecurityManager.updateDeviceStatusLocally(context, DeviceSecurityManager.STATUS_APPROVED, isPrimaryNow)
                                             Toast.makeText(context, t("🎉 تم اعتماد وتنشيط جهازك بنجاح!", "🎉 Device approved successfully!"), Toast.LENGTH_LONG).show()
                                             onVerified()
-                                        } else if (registered) {
-                                            Toast.makeText(context, t("✅ تم إرسال طلب الاعتماد إلى السحابة بنجاح! بانتظار موافقة المسؤول.", "✅ Registration sent to cloud! Awaiting admin approval."), Toast.LENGTH_LONG).show()
+                                        } else if (sent) {
+                                            Toast.makeText(context, t("✅ تم إرسال طلب الاعتماد إلى السحابة بنجاح! يظهر الآن لدى هاتف المدير لاعتماده.", "✅ Request sent to cloud successfully! Awaiting admin approval."), Toast.LENGTH_LONG).show()
                                         } else {
-                                            Toast.makeText(context, t("⏳ ما زال الجهاز بانتظار اعتماد المسؤول، تأكد من الاتصال بالإنترنت.", "⏳ Device is pending approval. Check internet connection."), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, t("⏳ فشل إرسال الطلب، يرجى التأكد من الاتصال بالإنترنت وبيانات السحابة.", "⏳ Failed to send request, check network and cloud configuration."), Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 },
@@ -775,12 +782,30 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
     var actionTargetDevice by remember { mutableStateOf<Map<String, Any>?>(null) }
     var actionType by remember { mutableStateOf<String?>(null) } // SUSPEND, BLOCK_WIPE, DELETE, APPROVE, RESUME, DECOMMISSION_SELF
     var isPerformingAction by remember { mutableStateOf(false) }
+    var actionJob by remember { mutableStateOf<Job?>(null) }
 
     // Master Key Verification Dialog for Transfer/Promote Admin
     var showVerificationDialogForTransferAdmin by remember { mutableStateOf(false) }
     var verificationCodeInput by remember { mutableStateOf("") }
     var isVerifyingCode by remember { mutableStateOf(false) }
     var pendingTargetDeviceIdForPromotion by remember { mutableStateOf("") }
+
+    // Handle back button for dialogs within Device Security
+    BackHandler(enabled = actionTargetDevice != null || showVerificationDialogForTransferAdmin || showPromoteSelfDialog) {
+        if (actionTargetDevice != null) {
+            actionJob?.cancel()
+            actionJob = null
+            isPerformingAction = false
+            actionTargetDevice = null
+            actionType = null
+        } else if (showVerificationDialogForTransferAdmin) {
+            showVerificationDialogForTransferAdmin = false
+            verificationCodeInput = ""
+        } else if (showPromoteSelfDialog) {
+            showPromoteSelfDialog = false
+            promoteSelfInput = ""
+        }
+    }
 
     val currentLang = LocalAppLanguage.current
     fun t(ar: String, en: String): String = if (currentLang == "en") en else ar
@@ -827,47 +852,69 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
     }
 
     val fetchCloudDevices: () -> Unit = {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             if (!isConnected) {
-                Toast.makeText(context, t("⚠️ يتطلب الاتصال بالإنترنت لإدارة أجهزة السحابة!", "⚠️ Cloud Device Management requires internet!"), Toast.LENGTH_SHORT).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, t("⚠️ يتطلب الاتصال بالإنترنت لإدارة أجهزة السحابة!", "⚠️ Cloud Device Management requires internet!"), Toast.LENGTH_SHORT).show()
+                }
                 return@launch
             }
-            isLoading = true
+            withContext(Dispatchers.Main) {
+                isLoading = true
+            }
             try {
-                if (SyncManager.initializeFirebase(context)) {
-                    val db = FirebaseFirestore.getInstance()
-                    // 1. Fetch all devices
-                    val snapshot = db.collection("device_registrations").get().awaitTask()
-                    parseAndSetSnapshot(snapshot)
-
-                    // 2. Fetch primary status of this device from doc
-                    val myDoc = db.collection("device_registrations").document(myDeviceId).get().awaitTask()
-                    if (myDoc.exists()) {
-                        val remotePrimary = myDoc.getBoolean("isPrimary") ?: false
-                        if (localIsPrimary || isPrimaryFlow) {
-                            currentDeviceIsPrimary = true
-                            if (!remotePrimary) {
-                                try {
-                                    db.collection("device_registrations").document(myDeviceId).update("isPrimary", true).awaitTask()
-                                } catch (_: Exception) {}
-                            }
-                        } else {
-                            currentDeviceIsPrimary = remotePrimary
+                withTimeout(8000L) {
+                    if (SyncManager.initializeFirebase(context)) {
+                        val db = FirebaseFirestore.getInstance()
+                        // 1. Fetch all devices from SERVER to bypass any stale local tombstones
+                        val snapshot = try {
+                            db.collection("device_registrations").get(com.google.firebase.firestore.Source.SERVER).awaitTask()
+                        } catch (_: Exception) {
+                            db.collection("device_registrations").get().awaitTask()
                         }
-                    } else if (localIsPrimary || isPrimaryFlow) {
-                        currentDeviceIsPrimary = true
-                    }
+                        withContext(Dispatchers.Main) {
+                            parseAndSetSnapshot(snapshot)
+                        }
 
-                    // 3. Fetch recovery key hash
-                    val securityDoc = db.collection("settings").document("device_security").get().awaitTask()
-                    if (securityDoc.exists()) {
-                        cloudRecoveryKeyHash = securityDoc.getString("recoveryKey") ?: ""
+                        // 2. Fetch primary status of this device from doc
+                        val myDoc = db.collection("device_registrations").document(myDeviceId).get().awaitTask()
+                        if (myDoc.exists()) {
+                            val remotePrimary = myDoc.getBoolean("isPrimary") ?: false
+                            withContext(Dispatchers.Main) {
+                                if (localIsPrimary || isPrimaryFlow) {
+                                    currentDeviceIsPrimary = true
+                                    if (!remotePrimary) {
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                db.collection("device_registrations").document(myDeviceId).update("isPrimary", true).awaitTask()
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
+                                } else {
+                                    currentDeviceIsPrimary = remotePrimary
+                                }
+                            }
+                        } else if (localIsPrimary || isPrimaryFlow) {
+                            withContext(Dispatchers.Main) {
+                                currentDeviceIsPrimary = true
+                            }
+                        }
+
+                        // 3. Fetch recovery key hash
+                        val securityDoc = db.collection("settings").document("device_security").get().awaitTask()
+                        if (securityDoc.exists()) {
+                            withContext(Dispatchers.Main) {
+                                cloudRecoveryKeyHash = securityDoc.getString("recoveryKey") ?: ""
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w("DeviceSecurity", "fetchCloudDevices timed out or failed: ${e.message}")
             } finally {
-                isLoading = false
+                withContext(Dispatchers.Main) {
+                    isLoading = false
+                }
             }
         }
     }
@@ -888,12 +935,16 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
                     isLoading = false
                 }
                 
-                // Continuous poll backup to ensure instant display
+                // Secondary fallback poll backup (low frequency, main sync is via snapshot listener)
                 pollJob = scope.launch(Dispatchers.IO) {
                     while (true) {
-                        kotlinx.coroutines.delay(4000)
+                        kotlinx.coroutines.delay(60000)
                         try {
-                            val snapshot = db.collection("device_registrations").get().awaitTask()
+                            val snapshot = try {
+                                db.collection("device_registrations").get(com.google.firebase.firestore.Source.SERVER).awaitTask()
+                            } catch (_: Exception) {
+                                db.collection("device_registrations").get().awaitTask()
+                            }
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
                                 parseAndSetSnapshot(snapshot)
                             }
@@ -919,58 +970,97 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
         val devId = (dev["deviceId"] as? String)?.takeIf { it.isNotBlank() } ?: (dev["id"] as? String) ?: ""
         val devName = (dev["deviceName"] as? String)?.takeIf { it.isNotBlank() } ?: t("هاتف أندرويد", "Android Device")
         
-        scope.launch {
-            isPerformingAction = true
+        actionJob?.cancel()
+        actionJob = scope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                isPerformingAction = true
+            }
             try {
-                when (action) {
+                val success = when (action) {
                     "APPROVE", "RESUME" -> {
                         val ok = DeviceSecurityManager.updateDeviceStatusOnCloud(context, devId, DeviceSecurityManager.STATUS_APPROVED)
-                        if (ok) {
-                            Toast.makeText(context, t("✅ تم اعتماد وتنشيط الجهاز ($devName) بنجاح!", "✅ Device ($devName) approved successfully!"), Toast.LENGTH_LONG).show()
-                            fetchCloudDevices()
-                        } else {
-                            Toast.makeText(context, t("❌ فشل اعتماد الجهاز. تحقق من الاتصال.", "❌ Failed to approve device."), Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                Toast.makeText(context, t("✅ تم اعتماد وتنشيط الجهاز ($devName) بنجاح!", "✅ Device ($devName) approved successfully!"), Toast.LENGTH_LONG).show()
+                                devicesList = devicesList.map {
+                                    val currentId = (it["deviceId"] as? String)?.takeIf { s -> s.isNotBlank() } ?: (it["id"] as? String) ?: ""
+                                    if (currentId == devId) it + ("status" to "APPROVED") else it
+                                }
+                            } else {
+                                Toast.makeText(context, t("❌ فشل اعتماد الجهاز أو انتهت المهلة. تحقق من الاتصال.", "❌ Failed to approve device. Check connection."), Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        ok
                     }
                     "SUSPEND" -> {
                         val ok = DeviceSecurityManager.updateDeviceStatusOnCloud(context, devId, DeviceSecurityManager.STATUS_SUSPENDED)
-                        if (ok) {
-                            Toast.makeText(context, t("⏸️ تم تعليق الجهاز ($devName) وقفل التطبيق عليه فوراً!", "⏸️ Device ($devName) suspended successfully!"), Toast.LENGTH_LONG).show()
-                            fetchCloudDevices()
-                        } else {
-                            Toast.makeText(context, t("❌ فشل تعليق الجهاز. تحقق من الاتصال.", "❌ Failed to suspend device."), Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                Toast.makeText(context, t("⏸️ تم تعليق الجهاز ($devName) وقفل التطبيق عليه فوراً!", "⏸️ Device ($devName) suspended successfully!"), Toast.LENGTH_LONG).show()
+                                devicesList = devicesList.map {
+                                    val currentId = (it["deviceId"] as? String)?.takeIf { s -> s.isNotBlank() } ?: (it["id"] as? String) ?: ""
+                                    if (currentId == devId) it + ("status" to "SUSPENDED") else it
+                                }
+                            } else {
+                                Toast.makeText(context, t("❌ فشل تعليق الجهاز أو انتهت المهلة. تحقق من الاتصال.", "❌ Failed to suspend device. Check connection."), Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        ok
                     }
                     "BLOCK_WIPE" -> {
                         val ok = DeviceSecurityManager.updateDeviceStatusOnCloud(context, devId, DeviceSecurityManager.STATUS_BLOCKED)
-                        if (ok) {
-                            Toast.makeText(context, t("🚫 تم حظر الجهاز ($devName) وإرسال أمر تدمير البيانات ومسح الذاكرة فوراً!", "🚫 Device ($devName) blocked and wipe command issued!"), Toast.LENGTH_LONG).show()
-                            fetchCloudDevices()
-                        } else {
-                            Toast.makeText(context, t("❌ فشل تنفيذ الحظر. تحقق من الاتصال.", "❌ Failed to block device."), Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                Toast.makeText(context, t("🚫 تم حظر الجهاز ($devName) وإرسال أمر تدمير البيانات ومسح الذاكرة فوراً!", "🚫 Device ($devName) blocked and wipe command issued!"), Toast.LENGTH_LONG).show()
+                                devicesList = devicesList.map {
+                                    val currentId = (it["deviceId"] as? String)?.takeIf { s -> s.isNotBlank() } ?: (it["id"] as? String) ?: ""
+                                    if (currentId == devId) it + ("status" to "BLOCKED") else it
+                                }
+                            } else {
+                                Toast.makeText(context, t("❌ فشل تنفيذ الحظر أو انتهت المهلة. تحقق من الاتصال.", "❌ Failed to block device. Check connection."), Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        ok
                     }
                     "DELETE" -> {
                         val ok = DeviceSecurityManager.deleteDeviceFromCloud(context, devId)
-                        if (ok) {
-                            Toast.makeText(context, t("🗑️ تم حذف الجهاز ($devName) من السحابة بنجاح!", "🗑️ Device ($devName) deleted from cloud!"), Toast.LENGTH_LONG).show()
-                            fetchCloudDevices()
-                        } else {
-                            Toast.makeText(context, t("❌ فشل حذف الجهاز. تحقق من الاتصال.", "❌ Failed to delete device."), Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                Toast.makeText(context, t("🗑️ تم حذف الجهاز ($devName) من السحابة بنجاح!", "🗑️ Device ($devName) deleted from cloud!"), Toast.LENGTH_LONG).show()
+                                devicesList = devicesList.filterNot {
+                                    val currentId = (it["deviceId"] as? String)?.takeIf { s -> s.isNotBlank() } ?: (it["id"] as? String) ?: ""
+                                    currentId == devId
+                                }
+                            } else {
+                                Toast.makeText(context, t("❌ فشل حذف الجهاز أو انتهت المهلة. تحقق من الاتصال.", "❌ Failed to delete device. Check connection."), Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        ok
                     }
                     "DECOMMISSION_SELF" -> {
                         DeviceSecurityManager.deleteDeviceFromCloud(context, myDeviceId)
                         DeviceSecurityManager.wipeDeviceData(context)
-                        Toast.makeText(context, t("🔴 تم إلغاء تسجيل وتدمير بيانات هذا الهاتف بنجاح.", "🔴 Device decommissioned & local data wiped."), Toast.LENGTH_LONG).show()
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, t("🔴 تم إلغاء تسجيل وتدمير بيانات هذا الهاتف بنجاح.", "🔴 Device decommissioned & local data wiped."), Toast.LENGTH_LONG).show()
+                        }
+                        true
                     }
+                    else -> false
+                }
+                if (success && action != "DECOMMISSION_SELF") {
+                    fetchCloudDevices()
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, t("خطأ: ${e.localizedMessage ?: "فشلت العملية"}", "Error: ${e.localizedMessage ?: "Action failed"}"), Toast.LENGTH_LONG).show()
+                }
             } finally {
-                isPerformingAction = false
-                actionTargetDevice = null
-                actionType = null
+                withContext(Dispatchers.Main) {
+                    isPerformingAction = false
+                    actionTargetDevice = null
+                    actionType = null
+                    actionJob = null
+                }
             }
         }
     }
@@ -984,10 +1074,11 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
 
         AlertDialog(
             onDismissRequest = {
-                if (!isPerformingAction) {
-                    actionTargetDevice = null
-                    actionType = null
-                }
+                actionJob?.cancel()
+                actionJob = null
+                isPerformingAction = false
+                actionTargetDevice = null
+                actionType = null
             },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1116,10 +1207,13 @@ fun DeviceSecurityManagementSubView(viewModel: GbrViewModel) {
             dismissButton = {
                 TextButton(
                     onClick = {
+                        actionJob?.cancel()
+                        actionJob = null
+                        isPerformingAction = false
                         actionTargetDevice = null
                         actionType = null
                     },
-                    enabled = !isPerformingAction
+                    enabled = true
                 ) {
                     Text(t("إلغاء", "Cancel"), color = Color.Gray, fontSize = 12.sp)
                 }

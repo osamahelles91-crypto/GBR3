@@ -2547,6 +2547,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val cloudUpdated = doc.getLong("lastUpdated") ?: 0L
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
@@ -2613,6 +2618,11 @@ object SyncManager {
                                 val id = doc.id
                                 try {
                                     if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                        val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                        val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                        if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                            continue
+                                        }
                                         val cloudUpdated = doc.getLong("lastUpdated") ?: 0L
                                         val meta = repository.getSyncMetadataById(id)
                                         val isPending = meta?.isPendingSync ?: false
@@ -2674,6 +2684,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val cloudUpdated = doc.getLong("lastUpdated") ?: 0L
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
@@ -2746,6 +2761,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
                                     if (!isPending) {
@@ -2817,6 +2837,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     repository.gbrDao().insertQualityTest(
                                         QualityTest(
                                             id = id,
@@ -2849,6 +2874,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     repository.gbrDao().insertProductionAdjustment(
                                         ProductionAdjustment(
                                             id = id,
@@ -2933,8 +2963,11 @@ object SyncManager {
                 }
                 activeRegistrations.add(packagingReg)
 
-                // 9. Centralized System Logs sync
-                val logsReg = db.collection("system_logs").addSnapshotListener { snapshots, error ->
+                // 9. Centralized System Logs sync (limited to 30 recent records)
+                val logsReg = db.collection("system_logs")
+                    .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                    .limit(30)
+                    .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.e(TAG, "Listen failed for system_logs", error)
                         return@addSnapshotListener
@@ -2975,6 +3008,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val cloudUpdated = doc.getLong("createdAt") ?: System.currentTimeMillis()
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
@@ -3035,6 +3073,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val cloudUpdated = doc.getLong("createdAt") ?: System.currentTimeMillis()
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
@@ -3081,6 +3124,11 @@ object SyncManager {
                                 val doc = dc.document
                                 val id = doc.id
                                 if (dc.type == DocumentChange.Type.ADDED || dc.type == DocumentChange.Type.MODIFIED) {
+                                    val currentDevId = com.example.data.DeviceSecurityManager.getDeviceId()
+                                    val lastModDev = doc.getString("lastModifiedDevice") ?: ""
+                                    if (doc.metadata.hasPendingWrites() || (lastModDev.isNotBlank() && lastModDev == currentDevId)) {
+                                        continue
+                                    }
                                     val cloudUpdated = doc.getLong("createdAt") ?: System.currentTimeMillis()
                                     val meta = repository.getSyncMetadataById(id)
                                     val isPending = meta?.isPendingSync ?: false
@@ -3226,7 +3274,8 @@ object SyncManager {
                     "tdsUri" to resolvedTdsUri,
                     "isActive" to item.isActive,
                     "lastUpdated" to lastUpdatedTime,
-                    "priceHistory" to priceHistoryPayload
+                    "priceHistory" to priceHistoryPayload,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                 )
                 db.collection("raw_materials").document(id).set(payload, SetOptions.merge()).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "raw_materials")
@@ -3253,7 +3302,8 @@ object SyncManager {
                     "supports5L" to item.supports5L,
                     "netWeight5L" to item.netWeight5L,
                     "packagingWeightsJson" to item.packagingWeightsJson,
-                    "lastUpdated" to lastUpdatedTime
+                    "lastUpdated" to lastUpdatedTime,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                 )
                 val pItems = repository.gbrDao().getFormulationItemsWithDetails(id).first()
                 payload["items"] = pItems.map {
@@ -3484,7 +3534,8 @@ object SyncManager {
                     "id" to item.id,
                     "name" to item.name,
                     "createdAt" to item.createdAt,
-                    "lastUpdated" to item.lastUpdated
+                    "lastUpdated" to item.lastUpdated,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                 )
                 val samples = repository.gbrDao().getDevelopmentSamplesForProject(id).first()
                 payload["samples"] = samples.map {
@@ -3525,7 +3576,8 @@ object SyncManager {
                     hashMapOf<String, Any>(
                         "id" to qt.id,
                         "name" to qt.name,
-                        "sequenceIndex" to qt.sequenceIndex
+                        "sequenceIndex" to qt.sequenceIndex,
+                        "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                     ), SetOptions.merge()
                 ).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "quality_tests")
@@ -3550,7 +3602,8 @@ object SyncManager {
                         "reason" to adj.reason,
                         "notes" to adj.notes,
                         "timestamp" to adj.timestamp,
-                        "userName" to adj.userName
+                        "userName" to adj.userName,
+                        "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                     ), SetOptions.merge()
                 ).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "production_adjustments")
@@ -3598,7 +3651,8 @@ object SyncManager {
                     "notes" to test.notes,
                     "testValueA" to test.testValueA,
                     "testValueB" to test.testValueB,
-                    "createdAt" to test.createdAt
+                    "createdAt" to test.createdAt,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                 )
                 db.collection("laboratory_tests").document(id).set(payload, com.google.firebase.firestore.SetOptions.merge()).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "laboratory_tests")
@@ -3633,7 +3687,8 @@ object SyncManager {
                     "sessionId" to la.sessionId,
                     "testName" to la.testName,
                     "filePathOrUrl" to currentUrl,
-                    "createdAt" to la.createdAt
+                    "createdAt" to la.createdAt,
+                    "lastModifiedDevice" to com.example.data.DeviceSecurityManager.getDeviceId()
                 )
                 db.collection("laboratory_attachments").document(id).set(payload, com.google.firebase.firestore.SetOptions.merge()).awaitTask()
                 WriteDiagnostics.recordWrite(ctx, "laboratory_attachments")

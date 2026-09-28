@@ -8852,20 +8852,48 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                 try {
                     communicationMutex.withLock {
                         withContext(Dispatchers.IO) {
-                            // 1. Stop active fill process
-                            try {
-                                val fillStopUrl = resolveUrl(currentLineIp, "/fill/stop")
-                                val stopFillRequest = Request.Builder().url(fillStopUrl).build()
-                                client.newCall(stopFillRequest).execute().use {}
-                            } catch (e: Exception) {}
-
-                            // 2. Turn off all relays (1 to 4)
-                            for (id in 1..4) {
+                            if (selectedTab == 1) {
+                                // Line 2 (ESP32-S3): Emergency Stop Sequence
+                                // 1. Stop active fill process
                                 try {
-                                    val relayUrl = resolveUrl(currentLineIp, "/control?relay=$id&state=off")
-                                    val stopRelayRequest = Request.Builder().url(relayUrl).build()
-                                    client.newCall(stopRelayRequest).execute().use {}
+                                    val fillStopUrl = resolveUrl(currentLineIp, "/fill/stop")
+                                    val stopFillRequest = Request.Builder().url(fillStopUrl).build()
+                                    client.newCall(stopFillRequest).execute().use {}
                                 } catch (e: Exception) {}
+
+                                // 2. Send pulse to stop motor on Relay 3 (state=on)
+                                try {
+                                    val stopMotorUrl = resolveUrl(currentLineIp, "/control?relay=3&state=on")
+                                    val stopMotorRequest = Request.Builder().url(stopMotorUrl).build()
+                                    client.newCall(stopMotorRequest).execute().use {}
+                                } catch (e: Exception) {}
+
+                                // 3. Turn off Relays 1, 4, 5, 7, 8
+                                val line2RelaysToStop = listOf(1, 4, 5, 7, 8)
+                                for (id in line2RelaysToStop) {
+                                    try {
+                                        val relayUrl = resolveUrl(currentLineIp, "/control?relay=$id&state=off")
+                                        val stopRelayRequest = Request.Builder().url(relayUrl).build()
+                                        client.newCall(stopRelayRequest).execute().use {}
+                                    } catch (e: Exception) {}
+                                }
+                            } else {
+                                // Line 1: Existing behavior
+                                // 1. Stop active fill process
+                                try {
+                                    val fillStopUrl = resolveUrl(currentLineIp, "/fill/stop")
+                                    val stopFillRequest = Request.Builder().url(fillStopUrl).build()
+                                    client.newCall(stopFillRequest).execute().use {}
+                                } catch (e: Exception) {}
+
+                                // 2. Turn off all relays (1 to 4)
+                                for (id in 1..4) {
+                                    try {
+                                        val relayUrl = resolveUrl(currentLineIp, "/control?relay=$id&state=off")
+                                        val stopRelayRequest = Request.Builder().url(relayUrl).build()
+                                        client.newCall(stopRelayRequest).execute().use {}
+                                    } catch (e: Exception) {}
+                                }
                             }
 
                             // 3. Trigger immediate status update to refresh the UI state
