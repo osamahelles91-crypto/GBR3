@@ -5880,8 +5880,10 @@ fun Line2AutopilotScreen(
                                                 }
                                                 AutopilotStepType.ADD_WATER -> {
                                                     // Alarm rule: sound alarm and wait 2 seconds before opening valve
+                                                    val initWeight = queryLiveStatusDirect()?.weight ?: (lineStatus?.weight ?: 0.0)
+                                                    val finalTgt = initWeight + cStep.targetWaterKg
                                                     soundAlarmBeforeCommand("فتح صمام الماء وضخ ${cStep.targetWaterKg} كجم")
-                                                    sendCommand(resolveUrl(currentLineIp, "/fill/start?target=${cStep.targetWaterKg}"), {}, {})
+                                                    sendCommand(resolveUrl(currentLineIp, "/fill/start?target=${String.format(Locale.US, "%.1f", finalTgt)}"), {}, {})
                                                 }
                                                 AutopilotStepType.TARE_SCALE -> {
                                                     currentSubPhase = "⚖️ جاري تصفير الميزان عبر /scale/hardware-zero..."
@@ -5972,8 +5974,10 @@ fun Line2AutopilotScreen(
                                                 sendCommand(resolveUrl(currentLineIp, "/control?relay=5&state=off"), {}, {})
                                             }
                                             AutopilotStepType.ADD_WATER -> {
+                                                val initWeight = queryLiveStatusDirect()?.weight ?: (lineStatus?.weight ?: 0.0)
+                                                val finalTgt = initWeight + cStep.targetWaterKg
                                                 soundAlarmBeforeCommand("فتح صمام الماء وضخ ${cStep.targetWaterKg} كجم")
-                                                sendCommand(resolveUrl(currentLineIp, "/fill/start?target=${cStep.targetWaterKg}"), {}, {})
+                                                sendCommand(resolveUrl(currentLineIp, "/fill/start?target=${String.format(Locale.US, "%.1f", finalTgt)}"), {}, {})
                                             }
                                             AutopilotStepType.TARE_SCALE -> {
                                                 executeHardwareScaleZero("تصفير المؤشر الفعلي")
@@ -6043,12 +6047,14 @@ fun Line2AutopilotScreen(
                                     }
                                 }
                                 AutopilotStepType.ADD_WATER -> {
+                                    val initialWeight = queryLiveStatusDirect()?.weight ?: (lineStatus?.weight ?: 0.0)
+                                    val finalAbsoluteTarget = initialWeight + step.targetWaterKg
                                     // MANDATORY RULE 2: Sound alarm via /alarm/test, wait 2 seconds, then open water valve
                                     soundAlarmBeforeCommand("فتح صمام الماء وبدء ضخ ${String.format(Locale.US, "%.1f", step.targetWaterKg)} كجم")
 
-                                    currentSubPhase = "💧 جاري فتح الصمام وبدء ضخ الماء المستهدف (${String.format(Locale.US, "%.1f", step.targetWaterKg)} كجم)..."
+                                    currentSubPhase = "💧 جاري فتح الصمام وبدء ضخ ${String.format(Locale.US, "%.1f", step.targetWaterKg)} كجم ماء (الوزن المستهدف على الميزان: ${String.format(Locale.US, "%.1f", finalAbsoluteTarget)} كجم)..."
                                     sendCommand(
-                                        resolveUrl(currentLineIp, "/fill/start?target=${step.targetWaterKg}"),
+                                        resolveUrl(currentLineIp, "/fill/start?target=${String.format(Locale.US, "%.1f", finalAbsoluteTarget)}"),
                                         { updated -> if (updated != null) onStatusUpdate(updated) },
                                         { err ->
                                             val msg = err.message ?: ""
@@ -6070,25 +6076,26 @@ fun Line2AutopilotScreen(
                                         val isValveOpen = fresh?.relays?.find { it.id == 1 }?.state == true
                                         val isFillingActive = fresh?.fill_active == true || isValveOpen
                                         val currentKg = fresh?.weight ?: 0.0
+                                        val waterPumpedKg = (currentKg - initialWeight).coerceAtLeast(0.0)
 
-                                        currentSubPhase = "💧 ضخ الماء قيد التقدم: ${String.format(Locale.US, "%.1f", currentKg)} / ${String.format(Locale.US, "%.1f", step.targetWaterKg)} كجم"
+                                        currentSubPhase = "💧 ضخ الماء قيد التقدم: تم ضخ ${String.format(Locale.US, "%.1f", waterPumpedKg)} / ${String.format(Locale.US, "%.1f", step.targetWaterKg)} كجم (الميزان: ${String.format(Locale.US, "%.1f", currentKg)} كجم)"
 
                                         if (!isFillingActive) {
                                             zeroFillActiveCount++
                                             // Once fill_active is false and valve closed, check if target was actually reached
                                             if (zeroFillActiveCount >= 2) {
-                                                if (currentKg >= (step.targetWaterKg * 0.90) || currentKg >= (step.targetWaterKg - 0.5)) {
+                                                if (waterPumpedKg >= (step.targetWaterKg * 0.90) || currentKg >= (finalAbsoluteTarget - 0.5)) {
                                                     break
                                                 } else if (timeoutSeconds < 570) {
                                                     // Stopped prematurely due to water supply cut or safety shutdown
-                                                    currentSubPhase = "⚠️ تنبيه: توقف ضخ الماء قبل الوصول للهدف! تم ضخ ${String.format(Locale.US, "%.1f", currentKg)} كجم فقط."
+                                                    currentSubPhase = "⚠️ تنبيه: توقف ضخ الماء قبل الوصول للهدف! تم ضخ ${String.format(Locale.US, "%.1f", waterPumpedKg)} كجم فقط."
                                                     delay(2500)
                                                     break
                                                 }
                                             }
                                         } else {
                                             zeroFillActiveCount = 0
-                                            if (currentKg >= (step.targetWaterKg * 0.98)) {
+                                            if (waterPumpedKg >= (step.targetWaterKg * 0.98) || currentKg >= (finalAbsoluteTarget - 0.2)) {
                                                 // Target reached, wait for controller to turn off valve
                                                 delay(1000)
                                                 queryLiveStatusDirect()
@@ -6101,10 +6108,11 @@ fun Line2AutopilotScreen(
                                     }
 
                                     val finalWaterKg = queryLiveStatusDirect()?.weight ?: (lineStatus?.weight ?: 0.0)
-                                    if (finalWaterKg >= (step.targetWaterKg * 0.85)) {
-                                        currentSubPhase = "✅ تم اكتمال ضخ الماء بنجاح! الانتقال للخطوة التالية..."
+                                    val totalWaterAdded = (finalWaterKg - initialWeight).coerceAtLeast(0.0)
+                                    if (totalWaterAdded >= (step.targetWaterKg * 0.85) || finalWaterKg >= (finalAbsoluteTarget - 0.5)) {
+                                        currentSubPhase = "✅ تم اكتمال ضخ ${String.format(Locale.US, "%.1f", totalWaterAdded)} كجم ماء بنجاح! الانتقال للخطوة التالية..."
                                     } else {
-                                        currentSubPhase = "⚠️ تم إيقاف ضخ الماء بوزن ${String.format(Locale.US, "%.1f", finalWaterKg)} كجم فقط دون بلوغ الهدف الكامل!"
+                                        currentSubPhase = "⚠️ تم إيقاف ضخ الماء بوزن ${String.format(Locale.US, "%.1f", totalWaterAdded)} كجم فقط دون بلوغ الهدف الكامل (${step.targetWaterKg} كجم)!"
                                     }
                                     delay(1500)
                                 }
@@ -7179,15 +7187,15 @@ fun Line2AutopilotScreen(
                             // Warm warning that it doesn't tare anymore unless they add a tare step
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFFFEF3C7), // Warning yellow
-                                border = BorderStroke(1.dp, Color(0xFFFBBF24)),
+                                color = Color(0xFFE0F2FE),
+                                border = BorderStroke(1.dp, Color(0xFF38BDF8)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "⚠️ تنبيه: هذه الخطوة تضيف الماء مباشرة دون تصفير الميزان تلقائياً. يفضل إضافة خطوة تصفير الميزان قبلها إذا كنت ترغب في وزن كمية المياه بدقة من الصفر.",
+                                    text = "💧 نظام الضخ التلقائي يقوم بحساب وضخ كمية الماء المطلوبة بالكامل كوزن صافي يضاف فوق قراءة الميزان الحالية آلياً، دون اشتراط تصفير الميزان.",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFB45309),
+                                    color = Color(0xFF0369A1),
                                     modifier = Modifier.padding(8.dp)
                                 )
                             }
@@ -7427,15 +7435,15 @@ fun Line2AutopilotScreen(
             onDismissRequest = { showTareWarningDialog = false },
             title = {
                 Text(
-                    text = "⚠️ تحذير: خطوة مياه بدون تصفير",
+                    text = "💧 خيار تصفير الميزان قبل ضخ الماء",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
-                    color = Color(0xFFD97706)
+                    color = GBRDarkIndigo
                 )
             },
             text = {
                 Text(
-                    text = "لقد قمت بإضافة خطوة لإضافة كمية ماء دون أن تسبقها خطوة لتصفير الميزان آلياً. هل تريد المتابعة والتنفيذ بدون تصفير مسبق، أم ترغب في إضافة خطوة تصفير الميزان تلقائياً قبل خطوة إضافة المياه لضمان دقة الوزن؟",
+                    text = "يقوم النظام آلياً بحساب كمية الماء الصافية المطلوبة وضخها بالكامل كوزن مضاف فوق الوزن الحالي للميزان بدقة دون فقد. هل ترغب أيضاً في إدراج خطوة تصفير مسبق (Tare) لتبدأ القراءة من الصفر، أم المتابعة وضخ كمية الماء مباشرة فوق الوزن الحالي؟",
                     fontSize = 13.sp,
                     color = Color(0xFF334155)
                 )
@@ -7471,16 +7479,16 @@ fun Line2AutopilotScreen(
                         pendingNewStep = null
                         pendingStepIndex = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
+                    colors = ButtonDefaults.buttonColors(containerColor = GBRBlueMain)
                 ) {
-                    Text("إضافة خطوة تصفير مسبق", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("إضافة خطوة تصفير أولاً", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(
                         onClick = {
-                            // Option 2: Ignore warning and execute as is
+                            // Option 2: Execute as is without tare
                             val updatedSteps = currentProgram.steps.toMutableList()
                             if (pendingStepIndex != null && pendingStepIndex!! in updatedSteps.indices) {
                                 updatedSteps[pendingStepIndex!!] = pendingNewStep!!
@@ -7498,7 +7506,7 @@ fun Line2AutopilotScreen(
                             pendingStepIndex = null
                         }
                     ) {
-                        Text("تجاهل واستمرار", color = Color(0xFFEA580C), fontSize = 12.sp)
+                        Text("الضخ المباشر فوق الوزن الحالي", color = SuccessGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                     TextButton(
                         onClick = {
@@ -7840,8 +7848,10 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
     var fillFailureWarningState by remember(selectedTab) { mutableStateOf<Pair<Double, Double>?>(null) }
     val controllerAlerts by viewModel.activeControllerAlerts.collectAsState()
 
-    // Live target weight text input
+    // Live target weight text input & auto-fill dosing mode
     var targetInput by remember(selectedTab) { mutableStateOf("") }
+    var fillStartWeight by remember(selectedTab) { mutableDoubleStateOf(0.0) }
+    var fillRequestedWaterAmount by remember(selectedTab) { mutableDoubleStateOf(0.0) }
 
     // Alert Dialog / Notification state for scale action results & confirmation
     var scaleActionResultNotification by remember { mutableStateOf<ScaleActionResultData?>(null) }
@@ -7904,7 +7914,6 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
     var noResponseDialogMessage by remember { mutableStateOf("") }
 
     var isMonitoringFillWeight by remember { mutableStateOf(false) }
-    var fillStartWeight by remember { mutableStateOf(0.0) }
     var showWaterNoIncreaseDialog by remember { mutableStateOf(false) }
 
     // --- Sensors Status, Last Run Timestamps & Wiring State (Line 2) ---
@@ -9894,9 +9903,23 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                         }
 
                         // Target weight progress calculation (Dynamic target based on live fill_target or manual targetInput)
-                        val targetVal = if (fillActive && fillTargetVal > 0) fillTargetVal else (targetInput.toDoubleOrNull() ?: 0.0)
-                        val progressPct = if (targetVal > 0) {
-                            ((currentWeight / targetVal) * 100.0).coerceIn(0.0, 100.0)
+                        val targetScaleCutoff = (targetInput.toDoubleOrNull() ?: 0.0) + currentWeight
+                        val waterTargetKg = if (fillActive && fillRequestedWaterAmount > 0) {
+                            fillRequestedWaterAmount
+                        } else {
+                            (targetInput.toDoubleOrNull() ?: 0.0)
+                        }
+
+                        val waterPumpedSoFar = if (fillActive) {
+                            (currentWeight - fillStartWeight).coerceAtLeast(0.0)
+                        } else {
+                            0.0
+                        }
+
+                        val progressPct = if (fillActive && waterTargetKg > 0) {
+                            ((waterPumpedSoFar / waterTargetKg) * 100.0).coerceIn(0.0, 100.0)
+                        } else if (!fillActive && targetScaleCutoff > 0) {
+                            0.0
                         } else {
                             0.0
                         }
@@ -9926,7 +9949,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Text(
-                                        text = if (targetVal > 0) "التقدم نحو الوزن المستهدف" else "مؤشر الهدف المطلوب",
+                                        text = if (fillActive) "التقدم في ضخ كمية الماء المستهدفة" else "مؤشر تعبئة الماء المطلوب",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = GBRDarkIndigo
@@ -9951,44 +9974,47 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                 trackColor = Color(0xFFE0E0E0)
                             )
 
-                            if (targetVal > 0) {
+                            if (fillActive || targetScaleCutoff > 0) {
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "الهدف: ${String.format(Locale.US, "%.1f", targetVal)} كجم",
+                                            text = if (fillActive) "تم ضخ: ${String.format(Locale.US, "%.1f", waterPumpedSoFar)} من ${String.format(Locale.US, "%.1f", waterTargetKg)} كجم ماء"
+                                                   else "كمية الماء المطلوبة: ${String.format(Locale.US, "%.1f", waterTargetKg)} كجم",
                                             fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color.Gray
+                                            fontWeight = FontWeight.Bold,
+                                            color = GBRDarkIndigo
                                         )
                                         Text(
-                                            text = "الحالي: ${String.format(Locale.US, "%.1f", currentWeight)} كجم",
+                                            text = "الميزان الحالي: ${String.format(Locale.US, "%.1f", currentWeight)} كجم",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium,
                                             color = Color.Gray
                                         )
                                     }
 
-                                    val remaining = maxOf(0.0, targetVal - currentWeight)
+                                    val remaining = if (fillActive) maxOf(0.0, waterTargetKg - waterPumpedSoFar) else waterTargetKg
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = if (remaining > 0) "المتبقي: ${String.format(Locale.US, "%.1f", remaining)} كجم" else "تم الوصول للهدف 🎉",
+                                            text = if (fillActive && remaining <= 0.05) "تم اكتمال ضخ الماء المطلوب 🎉"
+                                                   else if (fillActive) "المتبقي للضخ: ${String.format(Locale.US, "%.1f", remaining)} كجم (الهدف على الميزان: ${String.format(Locale.US, "%.1f", targetScaleCutoff)} كجم)"
+                                                   else "الوزن النهائي على الميزان: ${String.format(Locale.US, "%.1f", targetScaleCutoff)} كجم",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (remaining > 0) WarningOrange else SuccessGreen
+                                            color = if (fillActive && remaining <= 0.05) SuccessGreen else if (fillActive) WarningOrange else GBRBlueMain
                                         )
 
                                         val fillStatusLabel = when {
                                             fillActive -> "جاري التعبئة ⏳"
                                             fillFailureWarningState != null -> "توقفت لعدم زيادة الوزن ⚠️"
                                             progressPct >= 95.0 -> "اكتملت التعبئة ✅"
-                                            targetVal > 0 -> "التعبئة متوقفة ⏹️"
+                                            targetScaleCutoff > 0 -> "جاهز للبدء ⏹️"
                                             else -> "جاهز للبدء ⏹️"
                                         }
                                         val fillStatusColor = when {
@@ -10007,7 +10033,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                 }
                             } else {
                                 Text(
-                                    text = "💡 أدخل وزناً مستهدفاً أدناه لرؤية مؤشر التقدم بدقة والتحكم التلقائي.",
+                                    text = "💡 أدخل كمية الماء المراد ضخها أدناه للبدء ورؤية مؤشر التقدم بدقة.",
                                     fontSize = 11.sp,
                                     color = Color.Gray,
                                     textAlign = TextAlign.Center,
@@ -10204,11 +10230,11 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
 
                         // 3. قسم "تعبئة تلقائية بوزن مستهدف" (Auto-fill section inside weight card)
                         Column(
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "🎯 نظام التعبئة التلقائية الذكي (Auto-Fill System)",
+                                text = "🎯 نظام تعبئة وضخ الماء الذكي (Auto-Fill System)",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = GBRDarkIndigo
@@ -10219,10 +10245,10 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                 value = targetInput,
                                 onValueChange = { targetInput = it },
                                 enabled = isControllerOnline,
-                                label = { Text("الوزن المستهدف المطلوب (كجم)") },
-                                placeholder = { Text("مثال: 450") },
+                                label = { Text("كمية الماء المراد إضافتها (كجم)") },
+                                placeholder = { Text("مثال: 10 أو 15 أو أي كمية") },
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = GBRBlueMain,
                                     unfocusedBorderColor = IndustrialBorder
@@ -10231,6 +10257,78 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                     .fillMaxWidth()
                                     .testTag("fill_target_input")
                             )
+
+                            // Live Calculation Box for complete transparency and operator confidence
+                            val inputAmount = targetInput.toDoubleOrNull() ?: 0.0
+                            if (inputAmount > 0.0) {
+                                val currentScaleW = lineStatus?.weight ?: 0.0
+                                val calculatedFinalCutoff = currentScaleW + inputAmount
+                                val netWaterToPump = inputAmount
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFF0FDF4),
+                                    border = BorderStroke(1.dp, Color(0xFF86EFAC)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "💧 كمية الماء الصافية المطلوب ضخها:",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF166534)
+                                            )
+                                            Text(
+                                                text = "${String.format(Locale.US, "%.1f", netWaterToPump)} كجم",
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF166534)
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "⚖️ قراءة الميزان الحالية الآن:",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF475569)
+                                            )
+                                            Text(
+                                                text = "${String.format(Locale.US, "%.1f", currentScaleW)} كجم",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF475569)
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "🎯 الوزن النهائي المتوقع على الميزان بعد الضخ:",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = GBRDarkIndigo
+                                            )
+                                            Text(
+                                                text = "${String.format(Locale.US, "%.1f", calculatedFinalCutoff)} كجم",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = GBRBlueMain
+                                            )
+                                        }
+                                    }
+                                }
+                            }
 
                             val waterValveOn = lineStatus?.relays?.find { it.id == 1 }?.state ?: false
 
@@ -10245,15 +10343,23 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                         }
                                         val targetNum = targetInput.toDoubleOrNull()
                                         if (targetNum == null || targetNum <= 0) {
-                                            Toast.makeText(context, "الرجاء إدخال وزن مستهدف صحيح أكبر من الصفر", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "الرجاء إدخال كمية ماء صحيحة أكبر من الصفر", Toast.LENGTH_SHORT).show()
                                             return@Button
                                         }
+
+                                        val currentScale = lineStatus?.weight ?: 0.0
+                                        val finalCutoffTarget = currentScale + targetNum
+
+                                        fillStartWeight = currentScale
+                                        fillRequestedWaterAmount = targetNum
                                         fillFailureWarningState = null
-                                        sendCommand("http://$currentLineIp/fill/start?target=$targetNum", { updated ->
+
+                                        val formattedCutoff = String.format(Locale.US, "%.1f", finalCutoffTarget)
+                                        sendCommand("http://$currentLineIp/fill/start?target=$formattedCutoff", { updated ->
                                             if (updated != null) {
                                                 lineStatus = updated
                                             }
-                                            Toast.makeText(context, "تم تشغيل نظام التعبئة التلقائية بنجاح 🚀", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "تم بدء ضخ $targetNum كجم ماء بنجاح 🚀 (الهدف على الميزان: $formattedCutoff كجم)", Toast.LENGTH_SHORT).show()
                                         }, { err ->
                                             val msg = err.message ?: ""
                                             if (msg.contains("الميزان غير متصل") || msg.contains("409") || msg.contains("scale", ignoreCase = true)) {
@@ -10277,7 +10383,7 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                                 ) {
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, tint = if (isControllerOnline) Color.White else Color.Gray, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("بدء التعبئة التلقائية", fontWeight = FontWeight.Bold, color = if (isControllerOnline) Color.White else Color.Gray, fontSize = 13.sp)
+                                    Text("بدء ضخ الماء التلقائي", fontWeight = FontWeight.Bold, color = if (isControllerOnline) Color.White else Color.Gray, fontSize = 13.sp)
                                 }
                             } else {
                                 // Active Fill Action Controls (Pause / Resume and Cancel side-by-side below input box)
@@ -11381,7 +11487,9 @@ fun EquipmentControlPanel(viewModel: GbrViewModel) {
                     val validPkgWeightFS = if (pkgWeightValFS > 0.0) pkgWeightValFS else 24.35
                     val containerCountFS = if (validPkgWeightFS > 0.0) kotlin.math.floor(currentWeightFS / validPkgWeightFS).toInt() else 0
                     val targetValFS = if (fillActiveFS && fillTargetValFS > 0) fillTargetValFS else (targetInput.toDoubleOrNull() ?: 0.0)
-                    val progressPctFS = if (targetValFS > 0) ((currentWeightFS / targetValFS) * 100.0).coerceIn(0.0, 100.0) else 0.0
+                    val waterTargetFS = if (fillRequestedWaterAmount > 0) fillRequestedWaterAmount else targetValFS
+                    val waterPumpedFS = if (fillActiveFS) (currentWeightFS - fillStartWeight).coerceAtLeast(0.0) else 0.0
+                    val progressPctFS = if (waterTargetFS > 0) ((waterPumpedFS / waterTargetFS) * 100.0).coerceIn(0.0, 100.0) else 0.0
 
                     androidx.compose.ui.window.Dialog(
                         onDismissRequest = { showFullScreenScaleMode = false },
